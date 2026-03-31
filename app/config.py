@@ -6,6 +6,7 @@ class Settings(BaseSettings):
     WHATSAPP_TOKEN: str = ""
     WHATSAPP_VERIFY_TOKEN: str = ""
     WHATSAPP_APP_SECRET: str = ""
+    WHATSAPP_PHONE_ID: str = ""
     REDIS_URL: str = "redis://localhost:6379"
     JWT_SECRET: str = ""
     SENTRY_DSN: str = ""
