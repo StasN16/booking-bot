@@ -1,5 +1,7 @@
 from fastapi import APIRouter, Request, HTTPException, Query
 from app.config import settings
+from app.services.ai_engine import process_message
+from app.services.whatsapp import send_message
 import logging
 
 logger = logging.getLogger(__name__)
@@ -33,7 +35,17 @@ async def receive_message(request: Request):
             message = messages[0]
             from_number = message.get("from")
             message_text = message.get("text", {}).get("body", "")
+            
             logger.info(f"Message from {from_number}: {message_text}")
+            
+            # Send to GPT-4o
+            ai_response = await process_message(message_text)
+            
+            # Send reply back to customer
+            reply = ai_response.get("response", "Sorry, I could not process your message.")
+            await send_message(from_number, reply)
+            
+            logger.info(f"Replied to {from_number}: {reply}")
         
         return {"status": "ok"}
     except Exception as e:
