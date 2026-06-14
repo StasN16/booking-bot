@@ -1,30 +1,80 @@
-import json
 import logging
 from app.core.enums import ConversationState
 from app.services.ai_engine import process_message
 from app.services.whatsapp import send_message
+from app.services.availability import get_treatments_summary, get_available_slots, get_treatments
+from app.services.booking import create_appointment, cancel_appointment, get_customer_appointments
+from datetime import datetime, date
 
 logger = logging.getLogger(__name__)
 
 async def handle_message(from_number: str, message_text: str):
     """Main function that handles incoming WhatsApp messages"""
     try:
-        # For now we use simple in-memory storage
-        # In Step 5 we'll connect this to the database
         state = get_conversation_state(from_number)
         history = get_conversation_history(from_number)
+        booking_context = get_booking_context(from_number)
         
-        # Send to GPT-4o
+        # Load real clinic data from database
+        clinic_data = await get_treatments_summary()
+        
+        # Send to GPT-4o with real clinic data
         ai_response = await process_message(
             message_text=message_text,
             conversation_history=history,
-            current_state=state
+            current_state=state,
+            clinic_data=clinic_data
         )
         
-        # Get the reply
         reply = ai_response.get("response", "Sorry, something went wrong.")
         next_state = ai_response.get("next_state", ConversationState.IDLE)
+        intention = ai_response.get("intention", "unknown")
+
+        # Save booking context as conversation progresses
+        if ai_response.get("treatment"):
+            booking_context["treatment"] = ai_response.get("treatment")
+        if ai_response.get("date"):
+            booking_context["date"] = ai_response.get("date")
+        if ai_response.get("time"):
+            booking_context["time"] = ai_response.get("time")
+        if ai_response.get("therapist"):
+            booking_context["therapist"] = ai_response.get("therapist")
         
+        update_booking_context(from_number, booking_context)
+
+        # Handle specific intentions
+        if intention == "check_availability":
+            slots_info = await get_real_availability(booking_context)
+            if slots_info:
+                reply = reply + "\n\n" + slots_info
+
+        elif intention == "confirm" and state == ConversationState.CONFIRMING:
+            # Save the appointment to database
+            result = await create_appointment(
+                customer_phone=from_number,
+                treatment_name=booking_context.get("treatment", ""),
+                therapist_name=booking_context.get("therapist", ""),
+                appointment_date=booking_context.get("date", ""),
+                appointment_time=booking_context.get("time", "")
+            )
+            
+            if result.get("success"):
+                reply = f"מעולה, הזמנת תור ל{result['treatment']} עם {result['therapist']} בתאריך {result['date']} בשעה {result['time']}. נתראה"
+                next_state = ConversationState.CONFIRMED
+                clear_booking_context(from_number)
+            else:
+                reply = "משהו השתבש בשמירת התור. נסה שוב"
+                next_state = ConversationState.IDLE
+
+        elif intention == "cancel":
+            result = await cancel_appointment(customer_phone=from_number)
+            if result.get("success"):
+                reply = "התור בוטל"
+                next_state = ConversationState.IDLE
+            else:
+                reply = "לא מצאתי תור קרוב לביטול"
+                next_state = ConversationState.IDLE
+
         # Update conversation state and history
         update_conversation_state(from_number, next_state)
         update_conversation_history(from_number, message_text, reply)
@@ -39,9 +89,44 @@ async def handle_message(from_number: str, message_text: str):
         await send_message(from_number, "Sorry, something went wrong. Please try again.")
 
 
-# Simple in-memory storage (will be replaced with DB in Step 5)
+async def get_real_availability(booking_context: dict) -> str:
+    """Get real available slots from database"""
+    try:
+        treatment_name = booking_context.get("treatment", "")
+        date_str = booking_context.get("date", "")
+        
+        if not treatment_name:
+            return ""
+        
+        treatments = await get_treatments()
+        treatment = next((t for t in treatments if treatment_name.lower() in t["name"].lower()), None)
+        
+        if not treatment:
+            return ""
+        
+        today = date.today()
+        if "מחר" in date_str or "tomorrow" in date_str.lower():
+            target_date = date(today.year, today.month, today.day + 1)
+        else:
+            target_date = today
+        
+        slots = await get_available_slots(treatment["id"], target_date)
+        
+        if not slots:
+            return "אין זמינות ביום זה"
+        
+        times = [s["time"] for s in slots[:6]]
+        return "זמנים פנויים: " + ", ".join(times)
+        
+    except Exception as e:
+        logger.error(f"Error getting availability: {e}")
+        return ""
+
+
+# In-memory storage
 _conversation_states = {}
 _conversation_histories = {}
+_booking_contexts = {}
 
 def get_conversation_state(phone: str) -> str:
     return _conversation_states.get(phone, ConversationState.IDLE)
@@ -59,6 +144,14 @@ def update_conversation_history(phone: str, user_message: str, bot_reply: str):
     _conversation_histories[phone].append({"role": "user", "content": user_message})
     _conversation_histories[phone].append({"role": "assistant", "content": bot_reply})
     
-    # Keep only last 10 messages to avoid token limits
     if len(_conversation_histories[phone]) > 20:
         _conversation_histories[phone] = _conversation_histories[phone][-20:]
+
+def get_booking_context(phone: str) -> dict:
+    return _booking_contexts.get(phone, {})
+
+def update_booking_context(phone: str, context: dict):
+    _booking_contexts[phone] = context
+
+def clear_booking_context(phone: str):
+    _booking_contexts[phone] = {}
