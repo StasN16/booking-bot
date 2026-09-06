@@ -4,6 +4,7 @@ from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy import select
 from app.config import settings
+from app.core.timeutils import now as clinic_now, to_clinic_tz
 from app.core.models.business import Business
 from app.core.models.therapist import Therapist
 from app.core.models.treatment import Treatment
@@ -14,7 +15,7 @@ logger = logging.getLogger(__name__)
 engine = create_async_engine(settings.DATABASE_URL)
 async_session = sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
 
-BUSINESS_ID = "550e8400-e29b-41d4-a716-446655440000"
+BUSINESS_ID = settings.BUSINESS_ID
 
 SLOT_STEP_MINUTES = 30
 
@@ -108,12 +109,12 @@ def compute_available_slots(
             logger.warning(f"Therapist {therapist.name} has malformed working hours, skipping")
             continue
 
-        current_time = datetime.combine(target_date, start)
-        end_time = datetime.combine(target_date, end)
+        current_time = to_clinic_tz(datetime.combine(target_date, start))
+        end_time = to_clinic_tz(datetime.combine(target_date, end))
 
         # A slot in the past can't be booked, so start from the next step.
-        if now is not None and target_date == now.date():
-            earliest = now.replace(second=0, microsecond=0)
+        if now is not None and to_clinic_tz(now).date() == target_date:
+            earliest = to_clinic_tz(now).replace(second=0, microsecond=0)
             if current_time < earliest:
                 current_time = earliest
                 remainder = current_time.minute % step_minutes
@@ -124,10 +125,12 @@ def compute_available_slots(
             slot_end = current_time + timedelta(minutes=duration_minutes)
 
             # Two intervals overlap when each starts before the other ends.
+            # Appointment times come from the database as aware datetimes, so
+            # normalize before comparing or the two kinds raise TypeError.
             is_taken = any(
                 a.therapist_id == therapist.id
-                and current_time < a.end_time
-                and slot_end > a.start_time
+                and current_time < to_clinic_tz(a.end_time)
+                and slot_end > to_clinic_tz(a.start_time)
                 for a in appointments
             )
 
@@ -176,7 +179,7 @@ async def get_available_slots(treatment_id: str, target_date: date) -> list:
             appointments=existing_appointments,
             target_date=target_date,
             duration_minutes=treatment.duration_minutes,
-            now=datetime.now(),
+            now=clinic_now(),
         )
 
 

@@ -1,11 +1,39 @@
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, timezone
 from types import SimpleNamespace
 
 import pytest
 
+from app.core.timeutils import CLINIC_TZ, now as clinic_now, to_clinic_tz
 from app.services.booking import build_start_time, pick_best_match
 from app.services.conversation import booking_failure, t, day_name
 from app.core.enums import ConversationState
+
+
+class TestClinicTimezone:
+    def test_now_is_aware(self):
+        assert clinic_now().tzinfo is not None
+
+    def test_naive_is_read_as_clinic_local(self):
+        """"10:00" from the bot means 10:00 in the clinic, not 10:00 UTC."""
+        result = to_clinic_tz(datetime(2027, 6, 25, 10, 0))
+        assert result.hour == 10
+        assert result.tzinfo is not None
+
+    def test_aware_utc_is_converted_not_relabelled(self):
+        """A UTC value out of the database must shift to clinic wall-clock."""
+        utc = datetime(2027, 6, 25, 7, 0, tzinfo=timezone.utc)
+        result = to_clinic_tz(utc)
+        assert result.utcoffset() == timedelta(hours=3)  # Israel summer time
+        assert result.hour == 10
+
+    def test_none_passes_through(self):
+        assert to_clinic_tz(None) is None
+
+    def test_naive_and_aware_become_comparable(self):
+        """The crash this fixes: comparing the two kinds raised TypeError."""
+        naive = to_clinic_tz(datetime(2027, 6, 25, 10, 0))
+        aware = to_clinic_tz(datetime(2027, 6, 25, 7, 0, tzinfo=timezone.utc))
+        assert naive == aware
 
 
 def named(name):
@@ -58,9 +86,18 @@ class TestPickBestMatch:
         assert pick_best_match([], "עיסוי") is None
 
 
+def clinic_dt(*args):
+    """Expected value: an aware datetime in the clinic's timezone."""
+    return datetime(*args, tzinfo=CLINIC_TZ)
+
+
 class TestBuildStartTime:
     def test_iso_date_and_time(self):
-        assert build_start_time("2027-06-25", "14:00") == datetime(2027, 6, 25, 14, 0)
+        assert build_start_time("2027-06-25", "14:00") == clinic_dt(2027, 6, 25, 14, 0)
+
+    def test_result_is_timezone_aware(self):
+        """Appointment columns are tz-aware; a naive value raises on compare."""
+        assert build_start_time("2027-06-25", "14:00").tzinfo is not None
 
     def test_accepts_natural_language_date(self):
         result = build_start_time("מחר", "14:00")
@@ -69,13 +106,13 @@ class TestBuildStartTime:
 
     def test_accepts_pm_time(self):
         """The original bug: strptime('%H:%M') crashed on '2pm'."""
-        assert build_start_time("2027-06-25", "2pm") == datetime(2027, 6, 25, 14, 0)
+        assert build_start_time("2027-06-25", "2pm") == clinic_dt(2027, 6, 25, 14, 0)
 
     def test_accepts_dotted_time(self):
-        assert build_start_time("2027-06-25", "14.30") == datetime(2027, 6, 25, 14, 30)
+        assert build_start_time("2027-06-25", "14.30") == clinic_dt(2027, 6, 25, 14, 30)
 
     def test_accepts_time_range(self):
-        assert build_start_time("2027-06-25", "14:00-15:00") == datetime(2027, 6, 25, 14, 0)
+        assert build_start_time("2027-06-25", "14:00-15:00") == clinic_dt(2027, 6, 25, 14, 0)
 
     @pytest.mark.parametrize("bad_time", ["", None, "sometime"])
     def test_unparseable_time_returns_none(self, bad_time):

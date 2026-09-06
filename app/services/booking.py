@@ -9,6 +9,7 @@ from app.core.models.customer import Customer
 from app.core.models.appointment import Appointment
 from app.core.models.treatment import Treatment
 from app.core.models.therapist import Therapist
+from app.core.timeutils import now as clinic_now, to_clinic_tz
 from app.services.date_parser import parse_date, parse_time
 
 logger = logging.getLogger(__name__)
@@ -16,7 +17,7 @@ logger = logging.getLogger(__name__)
 engine = create_async_engine(settings.DATABASE_URL)
 async_session = sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
 
-BUSINESS_ID = "550e8400-e29b-41d4-a716-446655440000"
+BUSINESS_ID = settings.BUSINESS_ID
 
 
 def pick_best_match(candidates: list, query: str):
@@ -64,9 +65,10 @@ def build_start_time(appointment_date: str, appointment_time: str) -> datetime |
         return None
 
     hour, minute = normalized_time.split(":")
-    return datetime.combine(parsed_date, datetime.min.time()).replace(
+    naive = datetime.combine(parsed_date, datetime.min.time()).replace(
         hour=int(hour), minute=int(minute)
     )
+    return to_clinic_tz(naive)
 
 
 async def _find_conflict(session, therapist_id, start_time, end_time, exclude_id=None):
@@ -99,7 +101,7 @@ async def _next_appointment(session, customer):
         select(Appointment).where(
             Appointment.customer_id == customer.id,
             Appointment.status == "confirmed",
-            Appointment.start_time > datetime.now()
+            Appointment.start_time > clinic_now()
         ).order_by(Appointment.start_time)
     )
     return result.scalars().first()
@@ -184,7 +186,7 @@ async def create_appointment(
 
             end_time = start_time + timedelta(minutes=treatment.duration_minutes)
 
-            if start_time < datetime.now():
+            if start_time < clinic_now():
                 return {"success": False, "error": "in_the_past"}
 
             if await _find_conflict(session, therapist.id, start_time, end_time):
@@ -257,7 +259,7 @@ async def reschedule_appointment(
             if start_time is None:
                 return {"success": False, "error": "bad_datetime"}
 
-            if start_time < datetime.now():
+            if start_time < clinic_now():
                 return {"success": False, "error": "in_the_past"}
 
             end_time = start_time + timedelta(minutes=treatment.duration_minutes)
@@ -325,11 +327,13 @@ async def cancel_appointment(customer_phone: str, appointment_id: str = None) ->
 
             logger.info(f"Cancelled appointment {appointment.id} for {customer_phone}")
 
+            local_start = to_clinic_tz(appointment.start_time)
+
             return {
                 "success": True,
                 "treatment": treatment.name if treatment else "",
-                "date": appointment.start_time.strftime("%Y-%m-%d"),
-                "time": appointment.start_time.strftime("%H:%M"),
+                "date": local_start.strftime("%Y-%m-%d"),
+                "time": local_start.strftime("%H:%M"),
             }
 
         except Exception as e:
@@ -350,7 +354,7 @@ async def get_customer_appointments(customer_phone: str) -> list:
             select(Appointment).where(
                 Appointment.customer_id == customer.id,
                 Appointment.status == "confirmed",
-                Appointment.start_time > datetime.now()
+                Appointment.start_time > clinic_now()
             ).order_by(Appointment.start_time)
         )
         appointments = result.scalars().all()
@@ -359,12 +363,13 @@ async def get_customer_appointments(customer_phone: str) -> list:
         for app in appointments:
             treatment = await session.get(Treatment, app.treatment_id)
             therapist = await session.get(Therapist, app.therapist_id)
+            local_start = to_clinic_tz(app.start_time)
             result_list.append({
                 "id": str(app.id),
                 "treatment": treatment.name if treatment else "Unknown",
                 "therapist": therapist.name if therapist else "Unknown",
-                "date": app.start_time.strftime("%Y-%m-%d"),
-                "time": app.start_time.strftime("%H:%M"),
+                "date": local_start.strftime("%Y-%m-%d"),
+                "time": local_start.strftime("%H:%M"),
                 "status": app.status
             })
 

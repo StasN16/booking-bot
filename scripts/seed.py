@@ -20,9 +20,10 @@ def seed():
     Session = sessionmaker(engine)
     
     with Session() as session:
-        # Create business
+        # Create business. The id has to be the one the services query by,
+        # otherwise the bot starts up against an apparently empty clinic.
         business = Business(
-            id=uuid.uuid4(),
+            id=uuid.UUID(settings.BUSINESS_ID),
             name="מרכז טיפולים דנה",
             phone="0501234567",
             email="dana@clinic.com",
