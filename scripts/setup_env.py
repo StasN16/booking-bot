@@ -25,11 +25,11 @@ def main():
     if not EXAMPLE.exists():
         sys.exit(f"missing {EXAMPLE}")
 
-    if ENV.exists():
-        answer = input(f"{ENV.name} already exists. Overwrite? [y/N] ").strip().lower()
-        if answer != "y":
-            print("Left the existing .env alone.")
-            return 0
+    updating = ENV.exists()
+    if updating:
+        # Never clobber an existing .env: it holds API keys and tokens that
+        # are not recoverable from .env.example.
+        print(f"{ENV.name} exists - updating DATABASE_URL, keeping everything else.")
 
     print("Supabase connection")
     print("-" * 50)
@@ -47,10 +47,15 @@ def main():
     quoted = quote_password(password)
     url = f"postgresql+asyncpg://{user}:{quoted}@{host}/{DEFAULT_DB}"
 
-    text = EXAMPLE.read_text()
-    text = re.sub(r"^DATABASE_URL=.*$", f"DATABASE_URL={url}", text, count=1, flags=re.M)
+    if updating:
+        text = merge_into_existing(ENV.read_text(), url)
+        print(f"\nUpdated {ENV.name}, other values untouched.")
+    else:
+        text = re.sub(r"^DATABASE_URL=.*$", f"DATABASE_URL={url}",
+                      EXAMPLE.read_text(), count=1, flags=re.M)
+        print(f"\nWrote {ENV.name} (gitignored)")
+
     ENV.write_text(text)
-    print(f"\nWrote {ENV} (gitignored)")
 
     if input("\nRun the integration test now? [Y/n] ").strip().lower() in ("", "y"):
         print()
@@ -58,6 +63,33 @@ def main():
 
     print("Later:  python3 scripts/integration_test.py")
     return 0
+
+
+def merge_into_existing(text: str, url: str) -> str:
+    """
+    Replace DATABASE_URL in an existing .env, preserving every other line.
+
+    Settings added later (BUSINESS_ID, TIMEZONE) are appended when absent so
+    an older .env keeps working without being rewritten.
+    """
+    if re.search(r"^\s*DATABASE_URL=", text, flags=re.M):
+        text = re.sub(r"^\s*DATABASE_URL=.*$", f"DATABASE_URL={url}",
+                      text, count=1, flags=re.M)
+    else:
+        text = text.rstrip("\n") + f"\nDATABASE_URL={url}\n"
+
+    defaults = {
+        "BUSINESS_ID": "550e8400-e29b-41d4-a716-446655440000",
+        "TIMEZONE": "Asia/Jerusalem",
+    }
+    missing = [k for k in defaults if not re.search(rf"^\s*{k}=", text, flags=re.M)]
+    if missing:
+        text = text.rstrip("\n") + "\n"
+        for key in missing:
+            text += f"{key}={defaults[key]}\n"
+            print(f"  added missing {key}")
+
+    return text
 
 
 def quote_password(password: str) -> str:
