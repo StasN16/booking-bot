@@ -20,6 +20,13 @@ def seed():
     Session = sessionmaker(engine)
     
     with Session() as session:
+        # Re-running the seed should be harmless, so stop if it already ran.
+        existing = session.get(Business, uuid.UUID(settings.BUSINESS_ID))
+        if existing:
+            print(f"Business {existing.name} already exists, nothing to seed.")
+            print(f"Business ID: {existing.id}")
+            return
+
         # Create business. The id has to be the one the services query by,
         # otherwise the bot starts up against an apparently empty clinic.
         business = Business(
