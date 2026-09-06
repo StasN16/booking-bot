@@ -6,6 +6,9 @@ import json
 logger = logging.getLogger(__name__)
 client = AsyncOpenAI(api_key=settings.OPENAI_API_KEY)
 
+# A customer waiting on WhatsApp would rather get an error than a hung chat.
+OPENAI_TIMEOUT_SECONDS = 20.0
+
 SYSTEM_PROMPT = """You are Maya (מאיה), a receptionist at a clinic/spa. You communicate via WhatsApp.
 Your name is Maya. If someone asks your name, just say "מאיה" naturally, like a real person would.
 Don't say things like "אני כאן כדי לעזור" or "שאלה מעניינת" — just answer naturally.
@@ -49,7 +52,7 @@ CONVERSATION STATES:
 
 Always respond in JSON format:
 {
-    "intention": "book" | "cancel" | "reschedule" | "check_availability" | "question" | "confirm" | "deny" | "greeting" | "unknown",
+    "intention": "book" | "cancel" | "reschedule" | "my_appointments" | "check_availability" | "question" | "confirm" | "deny" | "greeting" | "unknown",
     "next_state": "idle" | "choosing_treatment" | "choosing_therapist" | "choosing_date" | "choosing_time" | "confirming" | "confirmed" | "cancelling" | "rescheduling",
     "treatment": "treatment name if mentioned or null",
     "date": "date if mentioned or null",
@@ -95,18 +98,21 @@ async def process_message(message_text: str, conversation_history: list = None, 
             model="gpt-4o",
             messages=messages,
             response_format={"type": "json_object"},
-            max_tokens=500
+            max_tokens=500,
+            timeout=OPENAI_TIMEOUT_SECONDS,
         )
-        
+
         result = json.loads(response.choices[0].message.content)
         logger.info(f"GPT-4o response: {result}")
         return result
-        
+
     except Exception as e:
         logger.error(f"OpenAI error: {e}")
+        # An empty response lets the caller fall back to its own localized copy
+        # instead of answering an Israeli customer in English.
         return {
             "intention": "unknown",
-            "next_state": "idle",
-            "language": "en",
-            "response": "Sorry, something went wrong. Try again in a moment."
+            "next_state": current_state or "idle",
+            "language": "",
+            "response": ""
         }

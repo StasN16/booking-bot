@@ -84,3 +84,38 @@ def _next_weekday(from_date: date, target_weekday: int) -> date:
     if days_ahead <= 0:
         days_ahead += 7
     return from_date + timedelta(days=days_ahead)
+
+
+def parse_time(time_str: str) -> str | None:
+    """
+    Normalize a time string to canonical HH:MM, or None if unparseable.
+
+    GPT returns times in whatever shape the customer typed, so accept
+    "14:00", "14.00", "2pm", "2 PM", "9:30" and ranges like "14:00-15:00"
+    (the start of the range wins).
+    """
+    if not time_str:
+        return None
+
+    text = time_str.strip().lower()
+
+    # A range means the customer named a start and an end - keep the start.
+    text = re.split(r"[-–—]|\bto\b|\bעד\b", text)[0].strip()
+
+    match = re.search(r"(\d{1,2})(?:[:.](\d{2}))?\s*(am|pm)?", text)
+    if not match:
+        return None
+
+    hour = int(match.group(1))
+    minute = int(match.group(2)) if match.group(2) else 0
+    meridiem = match.group(3)
+
+    if meridiem == "pm" and hour < 12:
+        hour += 12
+    elif meridiem == "am" and hour == 12:
+        hour = 0
+
+    if not (0 <= hour <= 23 and 0 <= minute <= 59):
+        return None
+
+    return f"{hour:02d}:{minute:02d}"

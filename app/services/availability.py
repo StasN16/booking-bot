@@ -1,5 +1,5 @@
 import logging
-from datetime import datetime, date, timedelta
+from datetime import datetime, date, time, timedelta
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy import select
@@ -15,6 +15,8 @@ engine = create_async_engine(settings.DATABASE_URL)
 async_session = sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
 
 BUSINESS_ID = "550e8400-e29b-41d4-a716-446655440000"
+
+SLOT_STEP_MINUTES = 30
 
 async def get_treatments() -> list:
     """Get all active treatments"""
@@ -58,18 +60,96 @@ async def get_therapists() -> list:
             for t in therapists
         ]
 
+
+def parse_hhmm(value: str) -> time | None:
+    """Parse a stored 'HH:MM' working-hours string. Returns None if malformed."""
+    if not value:
+        return None
+    parts = value.split(":")
+    try:
+        hour = int(parts[0])
+        minute = int(parts[1]) if len(parts) > 1 else 0
+    except (ValueError, IndexError):
+        return None
+    if not (0 <= hour <= 23 and 0 <= minute <= 59):
+        return None
+    return time(hour=hour, minute=minute)
+
+
+def compute_available_slots(
+    therapists,
+    appointments,
+    target_date: date,
+    duration_minutes: int,
+    now: datetime = None,
+    step_minutes: int = SLOT_STEP_MINUTES,
+) -> list:
+    """
+    Work out the free slots for a treatment on a date.
+
+    Kept free of any database access so the scheduling rules can be tested
+    directly. `therapists` and `appointments` are any objects exposing the
+    same attributes as the ORM models.
+    """
+    day_name = target_date.strftime("%A")
+    working_today = [
+        t for t in therapists
+        if t.working_days and day_name in t.working_days
+    ]
+    if not working_today:
+        return []
+
+    available_slots = []
+
+    for therapist in working_today:
+        start = parse_hhmm(therapist.working_hours_start)
+        end = parse_hhmm(therapist.working_hours_end)
+        if start is None or end is None:
+            logger.warning(f"Therapist {therapist.name} has malformed working hours, skipping")
+            continue
+
+        current_time = datetime.combine(target_date, start)
+        end_time = datetime.combine(target_date, end)
+
+        # A slot in the past can't be booked, so start from the next step.
+        if now is not None and target_date == now.date():
+            earliest = now.replace(second=0, microsecond=0)
+            if current_time < earliest:
+                current_time = earliest
+                remainder = current_time.minute % step_minutes
+                if remainder:
+                    current_time += timedelta(minutes=step_minutes - remainder)
+
+        while current_time + timedelta(minutes=duration_minutes) <= end_time:
+            slot_end = current_time + timedelta(minutes=duration_minutes)
+
+            # Two intervals overlap when each starts before the other ends.
+            is_taken = any(
+                a.therapist_id == therapist.id
+                and current_time < a.end_time
+                and slot_end > a.start_time
+                for a in appointments
+            )
+
+            if not is_taken:
+                available_slots.append({
+                    "time": current_time.strftime("%H:%M"),
+                    "therapist_id": str(therapist.id),
+                    "therapist_name": therapist.name
+                })
+
+            current_time += timedelta(minutes=step_minutes)
+
+    return available_slots
+
+
 async def get_available_slots(treatment_id: str, target_date: date) -> list:
     """Get available time slots for a treatment on a specific date"""
     async with async_session() as session:
-        # Get treatment duration
         treatment = await session.get(Treatment, treatment_id)
         if not treatment:
             return []
-        
-        duration = treatment.duration_minutes
-        day_name = target_date.strftime("%A")  # Monday, Tuesday, etc.
-        
-        # Get therapists working on that day
+
         result = await session.execute(
             select(Therapist).where(
                 Therapist.business_id == BUSINESS_ID,
@@ -77,18 +157,10 @@ async def get_available_slots(treatment_id: str, target_date: date) -> list:
             )
         )
         therapists = result.scalars().all()
-        available_therapists = [
-            t for t in therapists 
-            if day_name in t.working_days
-        ]
-        
-        if not available_therapists:
-            return []
-        
-        # Get existing appointments for that date
+
         start_of_day = datetime.combine(target_date, datetime.min.time())
         end_of_day = datetime.combine(target_date, datetime.max.time())
-        
+
         result = await session.execute(
             select(Appointment).where(
                 Appointment.business_id == BUSINESS_ID,
@@ -98,53 +170,22 @@ async def get_available_slots(treatment_id: str, target_date: date) -> list:
             )
         )
         existing_appointments = result.scalars().all()
-        
-        # Calculate available slots
-        available_slots = []
-        
-        for therapist in available_therapists:
-            start_parts = therapist.working_hours_start.split(":")
-            end_parts = therapist.working_hours_end.split(":")
-            start_h, start_m = int(start_parts[0]), int(start_parts[1]) if len(start_parts) > 1 else 0
-            end_h, end_m = int(end_parts[0]), int(end_parts[1]) if len(end_parts) > 1 else 0
 
-            current_time = datetime.combine(target_date, datetime.min.time().replace(hour=start_h, minute=start_m))
-            end_time = datetime.combine(target_date, datetime.min.time().replace(hour=end_h, minute=end_m))
+        return compute_available_slots(
+            therapists=therapists,
+            appointments=existing_appointments,
+            target_date=target_date,
+            duration_minutes=treatment.duration_minutes,
+            now=datetime.now(),
+        )
 
-            if target_date == date.today():
-                now = datetime.now().replace(second=0, microsecond=0)
-                if current_time < now:
-                    current_time = now
-                    if current_time.minute % 30 != 0:
-                        current_time += timedelta(minutes=(30 - current_time.minute % 30))
-
-            while current_time + timedelta(minutes=duration) <= end_time:
-                slot_end = current_time + timedelta(minutes=duration)
-                
-                # Check if slot is taken
-                is_taken = any(
-                    app.therapist_id == therapist.id and
-                    not (slot_end <= app.start_time or current_time >= app.end_time)
-                    for app in existing_appointments
-                )
-                
-                if not is_taken:
-                    available_slots.append({
-                        "time": current_time.strftime("%H:%M"),
-                        "therapist_id": str(therapist.id),
-                        "therapist_name": therapist.name
-                    })
-                
-                current_time += timedelta(minutes=30)
-        
-        return available_slots
 
 async def get_treatments_summary() -> str:
     """Get a text summary of treatments for the bot"""
     treatments = await get_treatments()
     if not treatments:
         return "אין טיפולים זמינים כרגע"
-    
+
     lines = []
     for t in treatments:
         lines.append(f"- {t['name']}: {t['duration_minutes']} דקות, {t['price']}₪")
