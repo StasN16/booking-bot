@@ -117,7 +117,19 @@ async def create_appointment(
             )
             end_time = start_time + timedelta(minutes=treatment.duration_minutes)
 
-            # Create appointment
+            # Check for conflicting appointments
+            conflict_result = await session.execute(
+                select(Appointment).where(
+                    Appointment.therapist_id == therapist.id,
+                    Appointment.status == "confirmed",
+                    Appointment.start_time < end_time,
+                    Appointment.end_time > start_time,
+                )
+            )
+            conflict = conflict_result.scalars().first()
+            if conflict:
+                return {"success": False, "error": "slot_taken", "message": "השעה כבר תפוסה. בחר שעה אחרת."}
+
             appointment = Appointment(
                 id=uuid.uuid4(),
                 business_id=BUSINESS_ID,

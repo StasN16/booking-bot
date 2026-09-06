@@ -103,12 +103,21 @@ async def get_available_slots(treatment_id: str, target_date: date) -> list:
         available_slots = []
         
         for therapist in available_therapists:
-            start_hour = int(therapist.working_hours_start.split(":")[0])
-            end_hour = int(therapist.working_hours_end.split(":")[0])
-            
-            current_time = datetime.combine(target_date, datetime.min.time().replace(hour=start_hour))
-            end_time = datetime.combine(target_date, datetime.min.time().replace(hour=end_hour))
-            
+            start_parts = therapist.working_hours_start.split(":")
+            end_parts = therapist.working_hours_end.split(":")
+            start_h, start_m = int(start_parts[0]), int(start_parts[1]) if len(start_parts) > 1 else 0
+            end_h, end_m = int(end_parts[0]), int(end_parts[1]) if len(end_parts) > 1 else 0
+
+            current_time = datetime.combine(target_date, datetime.min.time().replace(hour=start_h, minute=start_m))
+            end_time = datetime.combine(target_date, datetime.min.time().replace(hour=end_h, minute=end_m))
+
+            if target_date == date.today():
+                now = datetime.now().replace(second=0, microsecond=0)
+                if current_time < now:
+                    current_time = now
+                    if current_time.minute % 30 != 0:
+                        current_time += timedelta(minutes=(30 - current_time.minute % 30))
+
             while current_time + timedelta(minutes=duration) <= end_time:
                 slot_end = current_time + timedelta(minutes=duration)
                 
@@ -139,5 +148,34 @@ async def get_treatments_summary() -> str:
     lines = []
     for t in treatments:
         lines.append(f"- {t['name']}: {t['duration_minutes']} דקות, {t['price']}₪")
-    
+
     return "\n".join(lines)
+
+
+async def get_therapists_summary() -> str:
+    """Get a text summary of therapists for the bot"""
+    therapists = await get_therapists()
+    if not therapists:
+        return ""
+
+    day_names_he = {
+        "Sunday": "ראשון", "Monday": "שני", "Tuesday": "שלישי",
+        "Wednesday": "רביעי", "Thursday": "חמישי", "Friday": "שישי", "Saturday": "שבת"
+    }
+
+    lines = []
+    for t in therapists:
+        days_he = ", ".join(day_names_he.get(d.strip(), d) for d in t["working_days"].split(","))
+        lines.append(f"- {t['name']}: {t['working_hours_start']}-{t['working_hours_end']}, ימים: {days_he}")
+
+    return "\n".join(lines)
+
+
+async def find_next_available_date(treatment_id: str, start_date: date, max_days: int = 7) -> date | None:
+    """Search forward up to max_days to find a date with available slots."""
+    for i in range(1, max_days + 1):
+        check_date = start_date + timedelta(days=i)
+        slots = await get_available_slots(treatment_id, check_date)
+        if slots:
+            return check_date
+    return None

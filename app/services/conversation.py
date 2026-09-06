@@ -1,10 +1,17 @@
 import logging
+from collections import defaultdict
+from datetime import datetime, date
 from app.core.enums import ConversationState
 from app.services.ai_engine import process_message
 from app.services.whatsapp import send_message
-from app.services.availability import get_treatments_summary, get_available_slots, get_treatments
+from app.services.availability import get_treatments_summary, get_therapists_summary, get_available_slots, get_treatments, find_next_available_date
 from app.services.booking import create_appointment, cancel_appointment, get_customer_appointments
-from datetime import datetime, date
+from app.services.date_parser import parse_date
+
+HEBREW_DAY_NAMES = {
+    0: "יום שני", 1: "יום שלישי", 2: "יום רביעי",
+    3: "יום חמישי", 4: "יום שישי", 5: "שבת", 6: "יום ראשון",
+}
 
 logger = logging.getLogger(__name__)
 
@@ -17,13 +24,15 @@ async def handle_message(from_number: str, message_text: str):
         
         # Load real clinic data from database
         clinic_data = await get_treatments_summary()
-        
+        therapist_data = await get_therapists_summary()
+
         # Send to GPT-4o with real clinic data
         ai_response = await process_message(
             message_text=message_text,
             conversation_history=history,
             current_state=state,
-            clinic_data=clinic_data
+            clinic_data=clinic_data,
+            therapist_data=therapist_data
         )
         
         reply = ai_response.get("response", "Sorry, something went wrong.")
@@ -49,19 +58,29 @@ async def handle_message(from_number: str, message_text: str):
                 reply = reply + "\n\n" + slots_info
 
         elif intention == "confirm" and state == ConversationState.CONFIRMING:
-            # Save the appointment to database
+            # Normalize date to ISO format before creating appointment
+            booking_date = booking_context.get("date", "")
+            parsed = parse_date(booking_date)
+            if parsed:
+                booking_date = parsed.strftime("%Y-%m-%d")
+            else:
+                booking_date = date.today().strftime("%Y-%m-%d")
+
             result = await create_appointment(
                 customer_phone=from_number,
                 treatment_name=booking_context.get("treatment", ""),
                 therapist_name=booking_context.get("therapist", ""),
-                appointment_date=booking_context.get("date", ""),
+                appointment_date=booking_date,
                 appointment_time=booking_context.get("time", "")
             )
-            
+
             if result.get("success"):
                 reply = f"מעולה, הזמנת תור ל{result['treatment']} עם {result['therapist']} בתאריך {result['date']} בשעה {result['time']}. נתראה"
                 next_state = ConversationState.CONFIRMED
                 clear_booking_context(from_number)
+            elif result.get("error") == "slot_taken":
+                reply = result.get("message", "השעה כבר תפוסה. בחר שעה אחרת.")
+                next_state = ConversationState.CHOOSING_TIME
             else:
                 reply = "משהו השתבש בשמירת התור. נסה שוב"
                 next_state = ConversationState.IDLE
@@ -104,19 +123,31 @@ async def get_real_availability(booking_context: dict) -> str:
         if not treatment:
             return ""
         
-        today = date.today()
-        if "מחר" in date_str or "tomorrow" in date_str.lower():
-            target_date = date(today.year, today.month, today.day + 1)
-        else:
-            target_date = today
-        
+        target_date = parse_date(date_str)
+        if target_date is None:
+            target_date = date.today()
+
+        if target_date < date.today():
+            return "לא ניתן להזמין תור לתאריך שעבר"
+
         slots = await get_available_slots(treatment["id"], target_date)
-        
+
         if not slots:
-            return "אין זמינות ביום זה"
-        
-        times = [s["time"] for s in slots[:6]]
-        return "זמנים פנויים: " + ", ".join(times)
+            next_date = await find_next_available_date(treatment["id"], target_date)
+            if next_date:
+                day_name = HEBREW_DAY_NAMES.get(next_date.weekday(), "")
+                return f"אין זמינות ביום זה. היום הפנוי הקרוב הוא {day_name} {next_date.strftime('%d/%m')}"
+            return "אין זמינות בימים הקרובים"
+
+        grouped = defaultdict(list)
+        for s in slots:
+            grouped[s["therapist_name"]].append(s["time"])
+
+        lines = []
+        for name, times in grouped.items():
+            lines.append(f"{name}: {', '.join(times[:6])}")
+
+        return "זמנים פנויים:\n" + "\n".join(lines)
         
     except Exception as e:
         logger.error(f"Error getting availability: {e}")

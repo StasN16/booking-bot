@@ -71,13 +71,15 @@ Never use: "Great that you reached out", "How may I assist", "כיף שפנית"
 Never end a message with "רוצה לקבוע תור?" or "Want to book?" unless the customer already said they want to book.
 """
 
-async def process_message(message_text: str, conversation_history: list = None, current_state: str = "idle", clinic_data: str = "") -> dict:
+async def process_message(message_text: str, conversation_history: list = None, current_state: str = "idle", clinic_data: str = "", therapist_data: str = "") -> dict:
     """Send message to GPT-4o and get structured response"""
     try:
         # Build system prompt with real clinic data
         full_prompt = SYSTEM_PROMPT
         if clinic_data:
             full_prompt += f"\n\nCLINIC DATA (use ONLY these treatments and prices):\n{clinic_data}"
+        if therapist_data:
+            full_prompt += f"\n\nTHERAPISTS:\n{therapist_data}"
 
         messages = [{"role": "system", "content": full_prompt}]
         
