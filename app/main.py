@@ -5,7 +5,15 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 
 from app.config import settings
-from app.api.v1 import tasks, webhook
+from app.api.v1 import (
+    appointments,
+    auth,
+    customers,
+    tasks,
+    therapists,
+    treatments,
+    webhook,
+)
 from app.services import audit_watch
 from app.services.reminders import send_due_reminders
 
@@ -76,6 +84,14 @@ app = FastAPI(title="Booking Bot", version="0.1.0", lifespan=lifespan)
 
 app.include_router(webhook.router, prefix="/api/v1")
 app.include_router(tasks.router, prefix="/api/v1")
+
+# Management API for the dashboard. Every router except auth requires a
+# token, declared on the router so a new endpoint cannot forget it.
+app.include_router(auth.router, prefix="/api/v1")
+app.include_router(appointments.router, prefix="/api/v1")
+app.include_router(therapists.router, prefix="/api/v1")
+app.include_router(treatments.router, prefix="/api/v1")
+app.include_router(customers.router, prefix="/api/v1")
 
 
 @app.get("/")

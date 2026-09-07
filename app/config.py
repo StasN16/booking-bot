@@ -41,7 +41,11 @@ class Settings(BaseSettings):
     WHATSAPP_APP_SECRET: str = ""
     WHATSAPP_PHONE_ID: str = ""
     REDIS_URL: str = "redis://localhost:6379"
+    # Dashboard sign-in. JWT_SECRET signs the tokens; leaving either of
+    # these blank keeps the API shut rather than open.
     JWT_SECRET: str = ""
+    ADMIN_PASSWORD: str = ""
+    JWT_HOURS: int = 12
     SENTRY_DSN: str = ""
 
     class Config:
