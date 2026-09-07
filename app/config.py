@@ -28,6 +28,13 @@ class Settings(BaseSettings):
     AUDIT_LOG_PATH: str = "logs/audit.jsonl"
     # Anything slower than this is reported by the analysis as worth a look.
     AUDIT_SLOW_MS: int = 5000
+    # The server checks its own trail on this interval and logs what the
+    # analyzers find, so a broken conversation surfaces without anyone
+    # remembering to look. 0 turns the checking off.
+    AUDIT_WATCH_MINUTES: int = 15
+    # Informational findings are for reading in a report, not for
+    # interrupting someone watching the server.
+    AUDIT_WATCH_INFO: bool = False
     OPENAI_API_KEY: str = ""
     WHATSAPP_TOKEN: str = ""
     WHATSAPP_VERIFY_TOKEN: str = ""

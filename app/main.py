@@ -6,6 +6,7 @@ from fastapi import FastAPI
 
 from app.config import settings
 from app.api.v1 import tasks, webhook
+from app.services import audit_watch
 from app.services.reminders import send_due_reminders
 
 logging.basicConfig(level=logging.INFO)
@@ -27,23 +28,48 @@ async def reminder_loop():
         await asyncio.sleep(interval)
 
 
+async def audit_loop():
+    """Check the audit trail on an interval and log anything wrong with it."""
+    interval = max(1, settings.AUDIT_WATCH_MINUTES) * 60
+    # Findings already in the log were seen before this restart.
+    known = audit_watch.prime()
+    logger.info(
+        f"Audit watch started, every {settings.AUDIT_WATCH_MINUTES} min "
+        f"({known} existing traces marked as seen)"
+    )
+    while True:
+        await asyncio.sleep(interval)
+        try:
+            audit_watch.check_recent()
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:
+            logger.exception(f"Audit watch failed: {e}")
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    task = None
+    tasks = []
+
     if settings.REMINDERS_ENABLED:
-        task = asyncio.create_task(reminder_loop())
+        tasks.append(asyncio.create_task(reminder_loop()))
     else:
         logger.info("Reminder loop disabled; drive /api/v1/tasks/reminders instead")
 
+    if settings.AUDIT_ENABLED and settings.AUDIT_WATCH_MINUTES > 0:
+        tasks.append(asyncio.create_task(audit_loop()))
+
     yield
 
-    if task:
+    for task in tasks:
         task.cancel()
+    for task in tasks:
         try:
             await task
         except asyncio.CancelledError:
             pass
-        logger.info("Reminder loop stopped")
+    if tasks:
+        logger.info("Background loops stopped")
 
 
 app = FastAPI(title="Booking Bot", version="0.1.0", lifespan=lifespan)
