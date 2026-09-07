@@ -52,15 +52,16 @@ async def send_message(to_number: str, message: str) -> bool:
         }
         
         async with httpx.AsyncClient() as client:
-            response = await client.post(url, json=payload, headers=headers)
-            
-            audit.record(
-                "whatsapp.api_call",
-                inputs={"to": audit.mask_phone(to_number),
-                        "body_chars": len(message)},
-                outputs={"status_code": response.status_code},
-                error=None if response.status_code == 200 else response.text,
-            )
+            # Timed, so the report can separate the network call from the
+            # deliberate pause above it.
+            with audit.step("whatsapp.api_call", inputs={
+                "to": audit.mask_phone(to_number),
+                "body_chars": len(message),
+            }) as api:
+                response = await client.post(url, json=payload, headers=headers)
+                api.outputs = {"status_code": response.status_code}
+                if response.status_code != 200:
+                    api.outputs["body"] = response.text
 
             if response.status_code == 200:
                 logger.info(f"Message sent to {to_number}")

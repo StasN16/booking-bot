@@ -188,3 +188,79 @@ class TestGrouping:
         traces = group_traces(events)
         assert set(traces) == {"a", "b"}
         assert [e.operation for e in traces["a"]] == ["first", "second"]
+
+
+class TestWhatsappCallIsTimed:
+    """
+    whatsapp.api_call was recorded without timing and reported 0ms for every
+    send, so the report could not say how much of the wait was the network
+    and how much was the deliberate pause. A recorded event is not the same
+    as a measured one.
+    """
+
+    @pytest.mark.asyncio
+    async def test_the_api_call_records_a_real_duration(self, sink, monkeypatch):
+        import httpx
+        from app.services import whatsapp
+
+        class Response:
+            status_code = 200
+            text = "ok"
+
+        async def slow_post(self, url, **kwargs):
+            import asyncio
+            await asyncio.sleep(0.05)
+            return Response()
+
+        monkeypatch.setattr(httpx.AsyncClient, "post", slow_post)
+        monkeypatch.setattr(whatsapp.settings, "REPLY_DELAY_SECONDS", 0)
+
+        with trace("t"):
+            assert await whatsapp.send_message("972500000000", "hello") is True
+
+        api = next(e for e in sink.events if e.operation == "whatsapp.api_call")
+        assert api.duration_ms >= 40, "the network call must be measured"
+        assert api.outputs["status_code"] == 200
+
+    @pytest.mark.asyncio
+    async def test_a_rejected_send_is_recorded_as_an_error(self, sink, monkeypatch):
+        import httpx
+        from app.services import whatsapp
+
+        class Rejected:
+            status_code = 401
+            text = '{"error":"Authentication Error"}'
+
+        async def post(self, url, **kwargs):
+            return Rejected()
+
+        monkeypatch.setattr(httpx.AsyncClient, "post", post)
+        monkeypatch.setattr(whatsapp.settings, "REPLY_DELAY_SECONDS", 0)
+
+        with trace("t"):
+            assert await whatsapp.send_message("972500000000", "hello") is False
+
+        api = next(e for e in sink.events if e.operation == "whatsapp.api_call")
+        assert api.outputs["status_code"] == 401
+
+    @pytest.mark.asyncio
+    async def test_the_reply_delay_is_honoured(self, sink, monkeypatch):
+        """The pause is a third of the wait, so it must be genuinely settable."""
+        import httpx
+        import time as timing
+        from app.services import whatsapp
+
+        class Response:
+            status_code = 200
+            text = "ok"
+
+        async def post(self, url, **kwargs):
+            return Response()
+
+        monkeypatch.setattr(httpx.AsyncClient, "post", post)
+        monkeypatch.setattr(whatsapp.settings, "REPLY_DELAY_SECONDS", 0)
+
+        started = timing.perf_counter()
+        with trace("t"):
+            await whatsapp.send_message("972500000000", "hello")
+        assert (timing.perf_counter() - started) < 1.0
