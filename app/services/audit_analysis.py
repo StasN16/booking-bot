@@ -31,6 +31,13 @@ INFO = "info"
 
 SEVERITY_ORDER = {ERROR: 0, WARNING: 1, INFO: 2}
 
+# Operations recorded inside another timed step. Summing a turn's duration
+# must skip these, or the time they cover is counted twice.
+NESTED_OPERATIONS = {
+    "whatsapp.api_call",       # inside whatsapp.send
+    "availability.computed",   # inside availability.lookup
+}
+
 
 @dataclass
 class Finding:
@@ -166,6 +173,34 @@ def slow_steps(events: list[AuditEvent], threshold_ms: int = None) -> list[Findi
     ]
 
 
+def turn_took_too_long(events: list[AuditEvent]) -> list[Finding]:
+    """
+    How long the customer waited, which no single step reveals.
+
+    Steps can each look acceptable while the turn as a whole does not, so
+    this sums them and names the two largest contributors.
+    """
+    if not find(events, "message.received"):
+        return []
+
+    # Only operations recorded inside another timed step are skipped, or they
+    # would be counted twice. ai.request is not one of them: it is a top-level
+    # step and usually the largest single contributor, so excluding it would
+    # hide the very thing this looks for.
+    total = sum(e.duration_ms for e in events
+                if e.operation not in NESTED_OPERATIONS)
+    if total <= settings.AUDIT_SLOW_MS:
+        return []
+
+    worst = sorted(events, key=lambda e: -e.duration_ms)[:2]
+    return [Finding(WARNING, "slow_turn",
+                    f"customer waited {total / 1000:.1f}s for a reply",
+                    events[0].trace_id,
+                    detail={"total_ms": round(total),
+                            "slowest": {e.operation: round(e.duration_ms)
+                                        for e in worst}})]
+
+
 def fallback_reply_used(events: list[AuditEvent]) -> list[Finding]:
     """The generic error text was sent because nothing better existed."""
     if find(events, "reply.fallback_used") is None:
@@ -245,6 +280,7 @@ ANALYZERS: list[Callable[[list[AuditEvent]], list[Finding]]] = [
     availability_answered_nothing,
     clinic_data_empty,
     slow_steps,
+    turn_took_too_long,
     fallback_reply_used,
     ai_extracted_nothing_repeatedly,
     state_did_not_advance,

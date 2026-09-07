@@ -218,3 +218,66 @@ class TestReport:
     def test_average_duration_is_computed(self):
         events = [event("op", 1, duration_ms=100), event("op", 2, duration_ms=200)]
         assert report(events)["operations"]["op"]["avg_ms"] == 150.0
+
+
+class TestTurnLatency:
+    """
+    Real traffic showed a 5.5 second wait built from steps that each looked
+    fine. Only the total tells the customer's story.
+    """
+
+    def test_a_slow_turn_is_reported(self):
+        events = healthy_trace()
+        events[3] = event("ai.request", 4, duration_ms=2400)
+        events[6] = event("whatsapp.send", 7, outputs={"delivered": True},
+                          duration_ms=3100)
+        findings = analyze_trace(events)
+        assert "slow_turn" in codes(findings)
+
+    def test_the_total_is_reported_in_seconds(self):
+        events = healthy_trace()
+        events[6] = event("whatsapp.send", 7, outputs={"delivered": True},
+                          duration_ms=6000)
+        finding = next(f for f in analyze_trace(events) if f.code == "slow_turn")
+        assert finding.detail["total_ms"] >= 6000
+        assert "s for a reply" in finding.message
+
+    def test_the_slowest_steps_are_named(self):
+        events = healthy_trace()
+        events[6] = event("whatsapp.send", 7, outputs={"delivered": True},
+                          duration_ms=6000)
+        finding = next(f for f in analyze_trace(events) if f.code == "slow_turn")
+        assert "whatsapp.send" in finding.detail["slowest"]
+
+    def test_nested_steps_are_not_double_counted(self):
+        """api_call happens inside send; counting both would inflate the total."""
+        events = healthy_trace()
+        events[6] = event("whatsapp.send", 7, outputs={"delivered": True},
+                          duration_ms=6000)
+        events.append(event("whatsapp.api_call", 9, duration_ms=5900))
+        finding = next(f for f in analyze_trace(events) if f.code == "slow_turn")
+        # The 5900ms inside the send must not be added on top of it.
+        assert finding.detail["total_ms"] < 6000 + 5900
+
+    def test_the_model_call_is_counted(self):
+        """
+        ai.request is a top-level step and usually the biggest contributor.
+        Treating it as nested would hide the slow turns this exists to find.
+        """
+        events = healthy_trace()
+        events[3] = event("ai.request", 4, duration_ms=2400)
+        events[6] = event("whatsapp.send", 7, outputs={"delivered": True},
+                          duration_ms=3100)
+        finding = next(f for f in analyze_trace(events) if f.code == "slow_turn")
+        assert finding.detail["total_ms"] >= 2400 + 3100
+
+    def test_a_quick_turn_is_not_reported(self):
+        assert "slow_turn" not in codes(analyze_trace(healthy_trace()))
+
+
+class TestReplyDelayIsConfigurable:
+    def test_the_pause_can_be_turned_off(self):
+        """It is pure added latency, so it must be tunable without a code change."""
+        from app.config import settings
+        assert hasattr(settings, "REPLY_DELAY_SECONDS")
+        assert isinstance(settings.REPLY_DELAY_SECONDS, float)

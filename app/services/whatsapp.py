@@ -31,8 +31,10 @@ async def send_typing_indicator(to_number: str):
 async def send_message(to_number: str, message: str) -> bool:
     """Send a WhatsApp message to a customer"""
     try:
-        # Add natural delay (2-4 seconds)
-        await asyncio.sleep(2)
+        # A pause so replies do not feel machine-fast. It is pure latency,
+        # so it is configurable rather than baked in.
+        if settings.REPLY_DELAY_SECONDS > 0:
+            await asyncio.sleep(settings.REPLY_DELAY_SECONDS)
 
         url = f"{WHATSAPP_API_URL}/{settings.WHATSAPP_PHONE_ID}/messages"
         

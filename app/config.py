@@ -17,6 +17,10 @@ class Settings(BaseSettings):
     # Shared secret for the reminder endpoint. Blank leaves it closed.
     TASKS_TOKEN: str = ""
 
+    # Pause before replying, so the bot does not answer machine-fast.
+    # Counts directly against how long a customer waits.
+    REPLY_DELAY_SECONDS: float = 2.0
+
     # Audit trail. One JSON object per operation, written to this file.
     AUDIT_ENABLED: bool = True
     AUDIT_LOG_PATH: str = "logs/audit.jsonl"
