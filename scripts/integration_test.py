@@ -203,7 +203,54 @@ async def main():
         await cleanup([appt_id, amb_id, dup.get("appointment_id")])
 
     await check_reminders(treatment)
+    await check_session_persistence()
     return summarize()
+
+
+async def check_session_persistence():
+    """Conversation state must outlive the process, not just the request."""
+    print()
+    print("=" * 70)
+    print("CONVERSATION STATE")
+    print("=" * 70)
+
+    from app.services import session_store
+    from app.core.enums import ConversationState
+
+    try:
+        fresh = await session_store.load(TEST_PHONE)
+        check("an unknown number starts idle with no history",
+              fresh["state"] == ConversationState.IDLE and fresh["history"] == [],
+              str(fresh))
+
+        history = [
+            {"role": "user", "content": "אני רוצה עיסוי שוודי"},
+            {"role": "assistant", "content": "לאיזה יום"},
+        ]
+        booking = {"treatment": "עיסוי שוודי", "date": "2027-06-25"}
+        await session_store.save(
+            phone=TEST_PHONE, state=ConversationState.CHOOSING_DATE,
+            history=history, booking=booking, language="he",
+        )
+
+        # A separate load is what a restarted process would do.
+        again = await session_store.load(TEST_PHONE)
+        check("state survives", again["state"] == ConversationState.CHOOSING_DATE,
+              str(again["state"]))
+        check("history survives", again["history"] == history,
+              f"{len(again['history'])} messages")
+        check("half-finished booking survives", again["booking"] == booking,
+              str(again["booking"]))
+        check("language is remembered for reminders", again["language"] == "he")
+
+        await session_store.clear_booking(TEST_PHONE)
+        cleared = await session_store.load(TEST_PHONE)
+        check("clearing the booking keeps the conversation",
+              cleared["booking"] == {} and cleared["history"] == history,
+              str(cleared["booking"]))
+
+    finally:
+        await cleanup([])
 
 
 async def check_reminders(treatment):

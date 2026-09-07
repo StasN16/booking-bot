@@ -1,10 +1,9 @@
 import logging
 import uuid
 from datetime import datetime, timedelta
-from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
-from sqlalchemy.orm import sessionmaker
 from sqlalchemy import select
 from app.config import settings
+from app.core.db import async_session
 from app.core.models.customer import Customer
 from app.core.models.appointment import Appointment
 from app.core.models.treatment import Treatment
@@ -14,8 +13,6 @@ from app.services.date_parser import parse_date, parse_time
 
 logger = logging.getLogger(__name__)
 
-engine = create_async_engine(settings.DATABASE_URL)
-async_session = sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
 
 BUSINESS_ID = settings.BUSINESS_ID
 

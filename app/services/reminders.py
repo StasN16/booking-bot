@@ -10,10 +10,9 @@ import logging
 from datetime import datetime, timedelta
 
 from sqlalchemy import select, update
-from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
-from sqlalchemy.orm import sessionmaker
 
 from app.config import settings
+from app.core.db import async_session
 from app.core.models.appointment import Appointment
 from app.core.models.customer import Customer
 from app.core.models.therapist import Therapist
@@ -23,8 +22,6 @@ from app.services.whatsapp import send_message
 
 logger = logging.getLogger(__name__)
 
-engine = create_async_engine(settings.DATABASE_URL)
-async_session = sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
 
 BUSINESS_ID = settings.BUSINESS_ID
 

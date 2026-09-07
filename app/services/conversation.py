@@ -16,9 +16,9 @@ from app.services.booking import (
     cancel_appointment,
     reschedule_appointment,
     get_customer_appointments,
-    remember_language,
 )
 from app.services.date_parser import parse_date
+from app.services import session_store
 
 logger = logging.getLogger(__name__)
 
@@ -109,9 +109,10 @@ async def handle_message(from_number: str, message_text: str):
     """Main function that handles incoming WhatsApp messages"""
     language = DEFAULT_LANGUAGE
     try:
-        state = get_conversation_state(from_number)
-        history = get_conversation_history(from_number)
-        booking_context = get_booking_context(from_number)
+        session = await session_store.load(from_number)
+        state = session["state"]
+        history = session["history"]
+        booking_context = session["booking"]
 
         # Load real clinic data from database
         clinic_data = await get_treatments_summary()
@@ -136,11 +137,6 @@ async def handle_message(from_number: str, message_text: str):
             if ai_response.get(field):
                 booking_context[field] = ai_response.get(field)
 
-        update_booking_context(from_number, booking_context)
-
-        # Remembered on the customer so reminders go out in this language.
-        await remember_language(from_number, language)
-
         if intention == "check_availability":
             slots_info = await get_real_availability(booking_context, language)
             if slots_info:
@@ -158,7 +154,7 @@ async def handle_message(from_number: str, message_text: str):
             if result.get("success"):
                 reply = t(language, "booked", **result)
                 next_state = ConversationState.CONFIRMED
-                clear_booking_context(from_number)
+                booking_context = {}
             else:
                 reply, next_state = booking_failure(language, result, ConversationState.CHOOSING_TIME)
 
@@ -173,7 +169,7 @@ async def handle_message(from_number: str, message_text: str):
                 if result.get("success"):
                     reply = t(language, "rescheduled", **result)
                     next_state = ConversationState.CONFIRMED
-                    clear_booking_context(from_number)
+                    booking_context = {}
                 else:
                     reply, next_state = booking_failure(language, result, ConversationState.RESCHEDULING)
             else:
@@ -183,7 +179,7 @@ async def handle_message(from_number: str, message_text: str):
             result = await cancel_appointment(customer_phone=from_number)
             if result.get("success"):
                 reply = t(language, "cancelled", **result)
-                clear_booking_context(from_number)
+                booking_context = {}
             else:
                 reply = t(language, "no_appointment")
             next_state = ConversationState.IDLE
@@ -203,9 +199,15 @@ async def handle_message(from_number: str, message_text: str):
         if not reply:
             reply = t(language, "error")
 
-        # Update conversation state and history
-        update_conversation_state(from_number, next_state)
-        update_conversation_history(from_number, message_text, reply)
+        # One write covers state, history, booking context and language.
+        history = append_turn(history, message_text, reply)
+        await session_store.save(
+            phone=from_number,
+            state=next_state,
+            history=history,
+            booking=booking_context,
+            language=language,
+        )
 
         # Send reply to customer
         await send_message(from_number, reply)
@@ -285,35 +287,9 @@ async def get_real_availability(booking_context: dict, language: str = DEFAULT_L
         return ""
 
 
-# In-memory storage
-_conversation_states = {}
-_conversation_histories = {}
-_booking_contexts = {}
-
-def get_conversation_state(phone: str) -> str:
-    return _conversation_states.get(phone, ConversationState.IDLE)
-
-def update_conversation_state(phone: str, state: str):
-    _conversation_states[phone] = state
-
-def get_conversation_history(phone: str) -> list:
-    return _conversation_histories.get(phone, [])
-
-def update_conversation_history(phone: str, user_message: str, bot_reply: str):
-    if phone not in _conversation_histories:
-        _conversation_histories[phone] = []
-
-    _conversation_histories[phone].append({"role": "user", "content": user_message})
-    _conversation_histories[phone].append({"role": "assistant", "content": bot_reply})
-
-    if len(_conversation_histories[phone]) > 20:
-        _conversation_histories[phone] = _conversation_histories[phone][-20:]
-
-def get_booking_context(phone: str) -> dict:
-    return _booking_contexts.get(phone, {})
-
-def update_booking_context(phone: str, context: dict):
-    _booking_contexts[phone] = context
-
-def clear_booking_context(phone: str):
-    _booking_contexts[phone] = {}
+def append_turn(history: list, user_message: str, bot_reply: str) -> list:
+    """Add this exchange to the history, keeping only the recent part."""
+    turns = list(history)
+    turns.append({"role": "user", "content": user_message})
+    turns.append({"role": "assistant", "content": bot_reply})
+    return turns[-session_store.MAX_HISTORY_MESSAGES:]

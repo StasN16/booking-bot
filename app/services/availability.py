@@ -1,9 +1,8 @@
 import logging
 from datetime import datetime, date, time, timedelta
-from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
-from sqlalchemy.orm import sessionmaker
 from sqlalchemy import select
 from app.config import settings
+from app.core.db import async_session
 from app.core.timeutils import now as clinic_now, to_clinic_tz
 from app.core.models.business import Business
 from app.core.models.therapist import Therapist
@@ -12,8 +11,6 @@ from app.core.models.appointment import Appointment
 
 logger = logging.getLogger(__name__)
 
-engine = create_async_engine(settings.DATABASE_URL)
-async_session = sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
 
 BUSINESS_ID = settings.BUSINESS_ID
 
