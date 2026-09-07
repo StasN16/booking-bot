@@ -208,3 +208,49 @@ class TestBookingSummaryForAI:
         })
         for value in ("עיסוי", "נועה", "2027-06-25", "14:00"):
             assert value in summary
+
+
+class TestVoiceEnforcement:
+    """
+    The prompt forbids emoji and exclamation marks in three places and the
+    model still sent "היי, הכל טוב! מה איתך?" in a live conversation. The
+    rule is enforced in code so it holds every time.
+    """
+
+    def test_exclamation_becomes_a_full_stop(self):
+        from app.services.ai_engine import enforce_voice
+        assert enforce_voice("היי, הכל טוב! מה איתך?") == "היי, הכל טוב. מה איתך?"
+
+    def test_runs_of_exclamations_collapse(self):
+        from app.services.ai_engine import enforce_voice
+        assert enforce_voice("נהדר!!! נתראה") == "נהדר. נתראה"
+
+    def test_emoji_are_removed(self):
+        from app.services.ai_engine import enforce_voice
+        assert "😊" not in enforce_voice("שלום 😊 מה שלומך")
+        assert "🎉" not in enforce_voice("Great 🎉 news")
+
+    def test_hebrew_survives_emoji_stripping(self):
+        from app.services.ai_engine import enforce_voice
+        text = "עיסוי שוודי עולה 280₪ ל-60 דקות"
+        assert enforce_voice(text) == text
+
+    def test_russian_survives(self):
+        from app.services.ai_engine import enforce_voice
+        text = "Здравствуйте, завтра у вас массаж"
+        assert enforce_voice(text) == text
+
+    def test_question_marks_are_left_alone(self):
+        from app.services.ai_engine import enforce_voice
+        text = "היי, מה נשמע?"
+        assert enforce_voice(text) == text
+
+    @pytest.mark.parametrize("text", ["", None])
+    def test_empty_input(self, text):
+        from app.services.ai_engine import enforce_voice
+        assert enforce_voice(text) == text
+
+    def test_no_exclamation_survives_anywhere(self):
+        from app.services.ai_engine import enforce_voice
+        for text in ["a!", "!b", "a ! b", "שלום!", "!!!"]:
+            assert "!" not in enforce_voice(text)

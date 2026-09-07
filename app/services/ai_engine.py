@@ -2,6 +2,7 @@ from openai import AsyncOpenAI
 from app.config import settings
 import logging
 import json
+import re
 
 logger = logging.getLogger(__name__)
 client = AsyncOpenAI(api_key=settings.OPENAI_API_KEY)
@@ -86,6 +87,41 @@ Never use: "Great that you reached out", "How may I assist", "כיף שפנית"
 Never end a message with "רוצה לקבוע תור?" or "Want to book?" unless the customer already said they want to book.
 """
 
+# Codepoint ranges holding emoji and pictographs. Hebrew, Cyrillic and Latin
+# all sit far below these, so stripping here cannot damage real text.
+EMOJI_PATTERN = re.compile(
+    "["
+    "\U0001F000-\U0001FAFF"  # pictographs, faces, symbols
+    "\U00002600-\U000027BF"  # misc symbols and dingbats
+    "\U00002B00-\U00002BFF"  # arrows and shapes
+    "\U0000FE00-\U0000FE0F"  # variation selectors
+    "\U00002190-\U000021FF"  # arrows
+    "]+",
+    flags=re.UNICODE,
+)
+
+
+def enforce_voice(text: str) -> str:
+    """
+    Strip what Maya never uses, whatever the model produced.
+
+    The prompt forbids emoji and exclamation marks in three places and the
+    model still returns "הכל טוב!". A rule this firm belongs in code, where
+    it holds every time rather than most of the time.
+    """
+    if not text:
+        return text
+
+    text = EMOJI_PATTERN.sub("", text)
+    # A run of exclamation marks becomes a full stop, keeping the sentence.
+    text = re.sub(r"\s*!+", ".", text)
+    # Tidy up what that can leave behind.
+    text = re.sub(r"\.{2,}", ".", text)
+    text = re.sub(r"\.\s*([,?])", r"\1", text)
+    text = re.sub(r"[ \t]{2,}", " ", text)
+    return text.strip()
+
+
 def describe_booking(booking: dict) -> str:
     """Spell out what the customer has already settled on."""
     if not booking:
@@ -134,6 +170,8 @@ async def process_message(message_text: str, conversation_history: list = None, 
         )
 
         result = json.loads(response.choices[0].message.content)
+        # The model does not reliably honour the no-emoji, no-exclamation rule.
+        result["response"] = enforce_voice(result.get("response", ""))
         logger.info(f"GPT-4o response: {result}")
         return result
 
