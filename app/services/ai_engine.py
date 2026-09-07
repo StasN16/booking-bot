@@ -1,5 +1,6 @@
 from openai import AsyncOpenAI
 from app.config import settings
+from app.core import audit
 import logging
 import json
 import re
@@ -161,13 +162,27 @@ async def process_message(message_text: str, conversation_history: list = None, 
         messages.append({"role": "system", "content": state_context})
         messages.append({"role": "user", "content": message_text})
         
-        response = await client.chat.completions.create(
-            model="gpt-4o",
-            messages=messages,
-            response_format={"type": "json_object"},
-            max_tokens=500,
-            timeout=OPENAI_TIMEOUT_SECONDS,
-        )
+        with audit.step("ai.request", inputs={
+            "model": "gpt-4o",
+            "state": current_state,
+            "history_messages": len(conversation_history or []),
+            "prompt_chars": len(full_prompt),
+            "message": message_text,
+            "booking_known": sorted((booking_context or {}).keys()),
+        }) as s_ai:
+            response = await client.chat.completions.create(
+                model="gpt-4o",
+                messages=messages,
+                response_format={"type": "json_object"},
+                max_tokens=500,
+                timeout=OPENAI_TIMEOUT_SECONDS,
+            )
+            usage = getattr(response, "usage", None)
+            s_ai.outputs = {
+                "finish_reason": response.choices[0].finish_reason,
+                "prompt_tokens": getattr(usage, "prompt_tokens", None),
+                "completion_tokens": getattr(usage, "completion_tokens", None),
+            }
 
         result = json.loads(response.choices[0].message.content)
         # The model does not reliably honour the no-emoji, no-exclamation rule.
@@ -177,6 +192,7 @@ async def process_message(message_text: str, conversation_history: list = None, 
 
     except Exception as e:
         logger.error(f"OpenAI error: {e}")
+        audit.record("ai.failed", error=f"{type(e).__name__}: {e}")
         # An empty response lets the caller fall back to its own localized copy
         # instead of answering an Israeli customer in English.
         return {

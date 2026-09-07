@@ -1,6 +1,7 @@
 import httpx
 import asyncio
 from app.config import settings
+from app.core import audit
 import logging
 
 logger = logging.getLogger(__name__)
@@ -51,6 +52,14 @@ async def send_message(to_number: str, message: str) -> bool:
         async with httpx.AsyncClient() as client:
             response = await client.post(url, json=payload, headers=headers)
             
+            audit.record(
+                "whatsapp.api_call",
+                inputs={"to": audit.mask_phone(to_number),
+                        "body_chars": len(message)},
+                outputs={"status_code": response.status_code},
+                error=None if response.status_code == 200 else response.text,
+            )
+
             if response.status_code == 200:
                 logger.info(f"Message sent to {to_number}")
                 return True
@@ -60,4 +69,7 @@ async def send_message(to_number: str, message: str) -> bool:
                 
     except Exception as e:
         logger.error(f"Error sending WhatsApp message: {e}")
+        audit.record("whatsapp.api_call",
+                     inputs={"to": audit.mask_phone(to_number)},
+                     error=f"{type(e).__name__}: {e}")
         return False

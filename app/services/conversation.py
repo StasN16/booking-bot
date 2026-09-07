@@ -19,6 +19,7 @@ from app.services.booking import (
 )
 from app.services.date_parser import parse_date
 from app.services import session_store
+from app.core import audit
 
 logger = logging.getLogger(__name__)
 
@@ -108,15 +109,37 @@ def day_name(target: date, language: str) -> str:
 async def handle_message(from_number: str, message_text: str):
     """Main function that handles incoming WhatsApp messages"""
     language = DEFAULT_LANGUAGE
-    try:
-        session = await session_store.load(from_number)
+    with audit.trace("handle_message",
+                     phone=audit.mask_phone(from_number),
+                     message_length=len(message_text or "")) as turn:
+      try:
+        audit.record("message.received",
+                     inputs={"phone": audit.mask_phone(from_number),
+                             "text": message_text})
+
+        with audit.step("session.load",
+                        inputs={"phone": audit.mask_phone(from_number)}) as s_load:
+            session = await session_store.load(from_number)
+            s_load.outputs = {
+                "state": str(session["state"]),
+                "history_messages": len(session["history"]),
+                "booking_fields": sorted(session["booking"].keys()),
+                "language": session["language"],
+            }
+
         state = session["state"]
         history = session["history"]
         booking_context = session["booking"]
 
         # Load real clinic data from database
-        clinic_data = await get_treatments_summary()
-        therapist_data = await get_therapists_summary()
+        with audit.step("clinic.load") as s_clinic:
+            clinic_data = await get_treatments_summary()
+            therapist_data = await get_therapists_summary()
+            s_clinic.outputs = {
+                "treatments_chars": len(clinic_data),
+                "therapists_chars": len(therapist_data),
+                "treatments_empty": "אין טיפולים" in clinic_data,
+            }
 
         # Send to GPT-4o with real clinic data
         ai_response = await process_message(
@@ -133,17 +156,32 @@ async def handle_message(from_number: str, message_text: str):
         intention = ai_response.get("intention", "unknown")
         language = ai_response.get("language") or DEFAULT_LANGUAGE
 
+        audit.record("ai.decision", outputs={
+            "intention": intention,
+            "next_state": str(next_state),
+            "language": language,
+            "reply_empty": not reply,
+            "extracted": {f: ai_response.get(f) for f in
+                          ("treatment", "therapist", "date", "time")
+                          if ai_response.get(f)},
+        })
+
         # Save booking context as conversation progresses
         for field in ("treatment", "date", "time", "therapist"):
             if ai_response.get(field):
                 booking_context[field] = ai_response.get(field)
 
         if intention == "check_availability":
-            slots_info = await get_real_availability(booking_context, language)
+            with audit.step("availability.lookup",
+                            inputs={"booking": booking_context}) as s_av:
+                slots_info = await get_real_availability(booking_context, language)
+                s_av.outputs = {"returned_text": bool(slots_info),
+                                "chars": len(slots_info or "")}
             if slots_info:
                 reply = (reply + "\n\n" + slots_info).strip()
 
         elif intention == "confirm" and state == ConversationState.CONFIRMING:
+            audit.record("booking.attempt", inputs={"booking": booking_context})
             result = await create_appointment(
                 customer_phone=from_number,
                 treatment_name=booking_context.get("treatment", ""),
@@ -151,6 +189,12 @@ async def handle_message(from_number: str, message_text: str):
                 appointment_date=booking_context.get("date", ""),
                 appointment_time=booking_context.get("time", "")
             )
+
+            audit.record("booking.result", outputs={
+                "success": bool(result.get("success")),
+                "error": result.get("error"),
+                "appointment_id": result.get("appointment_id"),
+            }, error=None if result.get("success") else str(result.get("error")))
 
             if result.get("success"):
                 reply = t(language, "booked", **result)
@@ -167,6 +211,10 @@ async def handle_message(from_number: str, message_text: str):
                     new_date=booking_context.get("date", ""),
                     new_time=booking_context.get("time", ""),
                 )
+                audit.record("reschedule.result", outputs={
+                    "success": bool(result.get("success")),
+                    "error": result.get("error"),
+                }, error=None if result.get("success") else str(result.get("error")))
                 if result.get("success"):
                     reply = t(language, "rescheduled", **result)
                     next_state = ConversationState.CONFIRMED
@@ -178,6 +226,10 @@ async def handle_message(from_number: str, message_text: str):
 
         elif intention == "cancel":
             result = await cancel_appointment(customer_phone=from_number)
+            audit.record("cancel.result", outputs={
+                "success": bool(result.get("success")),
+                "error": result.get("error"),
+            }, error=None if result.get("success") else str(result.get("error")))
             if result.get("success"):
                 reply = t(language, "cancelled", **result)
                 booking_context = {}
@@ -199,24 +251,50 @@ async def handle_message(from_number: str, message_text: str):
 
         if not reply:
             reply = t(language, "error")
+            audit.record("reply.fallback_used",
+                         outputs={"reason": "no reply produced"})
 
         # One write covers state, history, booking context and language.
         history = append_turn(history, message_text, reply)
-        await session_store.save(
-            phone=from_number,
-            state=next_state,
-            history=history,
-            booking=booking_context,
-            language=language,
-        )
+        with audit.step("session.save", inputs={
+            "state": str(next_state),
+            "history_messages": len(history),
+            "booking_fields": sorted(booking_context.keys()),
+        }):
+            await session_store.save(
+                phone=from_number,
+                state=next_state,
+                history=history,
+                booking=booking_context,
+                language=language,
+            )
 
         # Send reply to customer
-        await send_message(from_number, reply)
+        with audit.step("whatsapp.send", inputs={
+            "phone": audit.mask_phone(from_number),
+            "reply": reply,
+        }) as s_send:
+            delivered = await send_message(from_number, reply)
+            s_send.outputs = {"delivered": bool(delivered)}
 
-        logger.info(f"Handled message from {from_number}, state: {next_state}")
+        audit.record("message.handled", outputs={
+            "final_state": str(next_state),
+            "intention": intention,
+            "delivered": bool(delivered),
+        }, error=None if delivered else "WhatsApp send returned false")
 
-    except Exception as e:
-        logger.exception(f"Error handling message from {from_number}: {e}")
+        logger.info(
+            f"Handled message from {from_number}, state: {next_state}, "
+            f"trace={turn.trace_id}"
+        )
+
+      except Exception as e:
+        logger.exception(
+            f"Error handling message from {from_number} "
+            f"(trace={turn.trace_id}): {e}"
+        )
+        audit.record("message.failed",
+                     error=f"{type(e).__name__}: {e}")
         await send_message(from_number, t(language, "error"))
 
 

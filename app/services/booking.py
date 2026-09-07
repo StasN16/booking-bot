@@ -4,6 +4,7 @@ from datetime import datetime, timedelta
 from sqlalchemy import select
 from app.config import settings
 from app.core.db import async_session
+from app.core import audit
 from app.core.models.customer import Customer
 from app.core.models.appointment import Appointment
 from app.core.models.treatment import Treatment
@@ -200,6 +201,13 @@ async def create_appointment(
             if await _find_conflict(session, therapist.id, start_time, end_time):
                 return {"success": False, "error": "slot_taken"}
 
+            audit.record("booking.resolved", outputs={
+                "treatment": treatment.name,
+                "therapist": therapist.name,
+                "start_time": start_time.isoformat(),
+                "duration_minutes": treatment.duration_minutes,
+            })
+
             appointment = Appointment(
                 id=uuid.uuid4(),
                 business_id=BUSINESS_ID,
@@ -232,7 +240,12 @@ async def create_appointment(
             }
 
         except Exception as e:
-            logger.error(f"Error creating appointment: {e}")
+            logger.exception(f"Error creating appointment: {e}")
+            audit.record("booking.exception",
+                         inputs={"treatment": treatment_name,
+                                 "date": appointment_date,
+                                 "time": appointment_time},
+                         error=f"{type(e).__name__}: {e}")
             await session.rollback()
             return {"success": False, "error": "internal_error"}
 
@@ -308,7 +321,9 @@ async def reschedule_appointment(
             }
 
         except Exception as e:
-            logger.error(f"Error rescheduling appointment: {e}")
+            logger.exception(f"Error rescheduling appointment: {e}")
+            audit.record("reschedule.exception",
+                         error=f"{type(e).__name__}: {e}")
             await session.rollback()
             return {"success": False, "error": "internal_error"}
 
@@ -348,7 +363,9 @@ async def cancel_appointment(customer_phone: str, appointment_id: str = None) ->
             }
 
         except Exception as e:
-            logger.error(f"Error cancelling appointment: {e}")
+            logger.exception(f"Error cancelling appointment: {e}")
+            audit.record("cancel.exception",
+                         error=f"{type(e).__name__}: {e}")
             await session.rollback()
             return {"success": False, "error": "internal_error"}
 

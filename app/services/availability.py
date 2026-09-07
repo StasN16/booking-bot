@@ -3,6 +3,7 @@ from datetime import datetime, date, time, timedelta
 from sqlalchemy import select
 from app.config import settings
 from app.core.db import async_session
+from app.core import audit
 from app.core.timeutils import now as clinic_now, to_clinic_tz
 from app.core.models.business import Business
 from app.core.models.therapist import Therapist
@@ -171,13 +172,27 @@ async def get_available_slots(treatment_id: str, target_date: date) -> list:
         )
         existing_appointments = result.scalars().all()
 
-        return compute_available_slots(
+        slots = compute_available_slots(
             therapists=therapists,
             appointments=existing_appointments,
             target_date=target_date,
             duration_minutes=treatment.duration_minutes,
             now=clinic_now(),
         )
+
+        audit.record("availability.computed", inputs={
+            "treatment": treatment.name,
+            "date": target_date.isoformat(),
+            "weekday": target_date.strftime("%A"),
+            "duration_minutes": treatment.duration_minutes,
+        }, outputs={
+            "active_therapists": len(therapists),
+            "existing_appointments": len(existing_appointments),
+            "slots_found": len(slots),
+            "therapists_offering": sorted({s["therapist_name"] for s in slots}),
+        })
+
+        return slots
 
 
 async def get_treatments_summary() -> str:

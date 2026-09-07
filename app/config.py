@@ -16,6 +16,12 @@ class Settings(BaseSettings):
     REMINDER_POLL_MINUTES: int = 10
     # Shared secret for the reminder endpoint. Blank leaves it closed.
     TASKS_TOKEN: str = ""
+
+    # Audit trail. One JSON object per operation, written to this file.
+    AUDIT_ENABLED: bool = True
+    AUDIT_LOG_PATH: str = "logs/audit.jsonl"
+    # Anything slower than this is reported by the analysis as worth a look.
+    AUDIT_SLOW_MS: int = 5000
     OPENAI_API_KEY: str = ""
     WHATSAPP_TOKEN: str = ""
     WHATSAPP_VERIFY_TOKEN: str = ""

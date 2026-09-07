@@ -204,7 +204,125 @@ async def main():
 
     await check_reminders(treatment)
     await check_session_persistence()
+    await check_audit_trail(treatment)
     return summarize()
+
+
+async def check_audit_trail(treatment):
+    """
+    Drive a real conversation and read the audit trail it leaves behind.
+
+    Only the model and WhatsApp are stubbed; the database work is real, so
+    the trace is the one production would produce.
+    """
+    print()
+    print("=" * 70)
+    print("AUDIT TRAIL")
+    print("=" * 70)
+
+    from app.core import audit
+    from app.core.audit import MemorySink, group_traces, set_sink
+    from app.services import conversation
+    from app.services.audit_analysis import ERROR, analyze, report
+
+    sink = MemorySink()
+    previous_sink = set_sink(sink)
+
+    real_ai = conversation.process_message
+    real_send = conversation.send_message
+    sent = []
+
+    async def fake_ai(**kwargs):
+        return {
+            "intention": "check_availability",
+            "next_state": "choosing_time",
+            "treatment": treatment["name"],
+            "date": "מחר",
+            "time": None,
+            "therapist": None,
+            "language": "he",
+            "response": "בטח, הנה מה שפנוי",
+        }
+
+    async def fake_send(phone, text):
+        sent.append((phone, text))
+        return True
+
+    conversation.process_message = fake_ai
+    conversation.send_message = fake_send
+
+    try:
+        await conversation.handle_message(TEST_PHONE, "מה פנוי מחר")
+
+        traces = group_traces(sink.events)
+        check("a conversation produces exactly one trace", len(traces) == 1,
+              f"{len(traces)} traces, {len(sink.events)} events")
+
+        if not traces:
+            return
+
+        events = list(traces.values())[0]
+        recorded = [e.operation for e in events]
+        print(f"operations: {' -> '.join(recorded)}")
+
+        for expected in ("message.received", "session.load", "clinic.load",
+                         "ai.decision", "availability.lookup",
+                         "session.save", "whatsapp.send", "message.handled"):
+            check(f"trail records {expected}", expected in recorded)
+
+        check("every event carries timing",
+              all(e.duration_ms >= 0 for e in events))
+        check("events are sequentially numbered",
+              [e.seq for e in events] == list(range(1, len(events) + 1)))
+
+        lookup = next((e for e in events if e.operation == "availability.lookup"), None)
+        check("availability inputs were captured",
+              bool(lookup and lookup.inputs.get("booking")),
+              str(lookup.inputs if lookup else None))
+
+        send = next((e for e in events if e.operation == "whatsapp.send"), None)
+        check("the reply that went out was captured",
+              bool(send and send.outputs.get("delivered")),
+              str(send.outputs if send else None))
+
+        check("the customer's number is never written in full",
+              all(TEST_PHONE not in f"{e.inputs}{e.outputs}" for e in events))
+
+        findings = analyze(sink.events)
+        errors = [f for f in findings if f.severity == ERROR]
+        check("a healthy conversation raises no errors", not errors,
+              "; ".join(str(f) for f in errors) or "none")
+
+        # Now break it on purpose: the analyzers must notice.
+        sink.clear()
+        conversation.send_message = lambda phone, text: fail_to_send()
+
+        async def fail_to_send_async(phone, text):
+            return False
+
+        conversation.send_message = fail_to_send_async
+        await conversation.handle_message(TEST_PHONE, "מה פנוי מחר")
+
+        broken = analyze(sink.events)
+        broken_codes = {f.code for f in broken}
+        check("a failed delivery is detected",
+              "reply_not_delivered" in broken_codes,
+              str(sorted(broken_codes)))
+
+        summary = report(sink.events)
+        check("the report counts what it found",
+              summary["traces"] == 1 and summary["counts"][ERROR] >= 1,
+              str(summary["counts"]))
+
+    finally:
+        conversation.process_message = real_ai
+        conversation.send_message = real_send
+        set_sink(previous_sink)
+        await cleanup([])
+
+
+def fail_to_send():
+    raise AssertionError("unused")
 
 
 async def check_session_persistence():
