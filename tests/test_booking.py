@@ -170,3 +170,41 @@ class TestBookingFailure:
         reply, state = booking_failure("en", {"error": "something_new"}, ConversationState.IDLE)
         assert reply
         assert state == ConversationState.IDLE
+
+
+class TestBookingSummaryForAI:
+    """
+    The AI kept asking "which treatment?" while the availability code was
+    already answering for a treatment it had. It never saw the booking
+    context; now it does.
+    """
+
+    def test_known_fields_are_listed(self):
+        from app.services.ai_engine import describe_booking
+        summary = describe_booking({"treatment": "עיסוי שוודי", "date": "מחר"})
+        assert "עיסוי שוודי" in summary
+        assert "מחר" in summary
+
+    def test_it_tells_the_model_not_to_ask_again(self):
+        from app.services.ai_engine import describe_booking
+        assert "never ask again" in describe_booking({"treatment": "x"}).lower()
+
+    def test_missing_fields_are_left_out(self):
+        from app.services.ai_engine import describe_booking
+        summary = describe_booking({"treatment": "x"})
+        assert "date" not in summary
+        assert "time" not in summary
+
+    @pytest.mark.parametrize("booking", [None, {}, {"treatment": ""}, {"junk": "x"}])
+    def test_nothing_known_produces_nothing(self, booking):
+        from app.services.ai_engine import describe_booking
+        assert describe_booking(booking or {}) == ""
+
+    def test_all_four_fields(self):
+        from app.services.ai_engine import describe_booking
+        summary = describe_booking({
+            "treatment": "עיסוי", "therapist": "נועה",
+            "date": "2027-06-25", "time": "14:00",
+        })
+        for value in ("עיסוי", "נועה", "2027-06-25", "14:00"):
+            assert value in summary

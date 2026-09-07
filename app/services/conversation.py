@@ -124,7 +124,8 @@ async def handle_message(from_number: str, message_text: str):
             conversation_history=history,
             current_state=state,
             clinic_data=clinic_data,
-            therapist_data=therapist_data
+            therapist_data=therapist_data,
+            booking_context=booking_context,
         )
 
         reply = ai_response.get("response", "")

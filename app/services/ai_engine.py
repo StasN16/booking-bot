@@ -39,6 +39,18 @@ YOUR JOB:
 - ONLY use the treatments and prices provided in the CLINIC DATA section below
 - NEVER invent prices or treatments that are not in the list
 
+WHAT YOU ALREADY KNOW:
+- A "BOOKING SO FAR" section below lists what the customer has already told you
+- Never ask again for anything listed there. Asking "which treatment?" when the
+  treatment is already known reads as though you were not listening
+- Ask only for the next thing still missing
+
+AVAILABLE TIMES:
+- Real free times are appended to your reply automatically when the customer
+  asks about availability. Do not invent times, and do not say you will check
+- Since the times follow your message, do not end with a question that they
+  would contradict. Keep your reply short, or say nothing beyond acknowledging
+
 CONVERSATION STATES:
 - idle: waiting, no active booking in progress
 - choosing_treatment: customer is picking a treatment
@@ -74,7 +86,22 @@ Never use: "Great that you reached out", "How may I assist", "כיף שפנית"
 Never end a message with "רוצה לקבוע תור?" or "Want to book?" unless the customer already said they want to book.
 """
 
-async def process_message(message_text: str, conversation_history: list = None, current_state: str = "idle", clinic_data: str = "", therapist_data: str = "") -> dict:
+def describe_booking(booking: dict) -> str:
+    """Spell out what the customer has already settled on."""
+    if not booking:
+        return ""
+    known = [f"- {field}: {booking[field]}"
+             for field in ("treatment", "therapist", "date", "time")
+             if booking.get(field)]
+    if not known:
+        return ""
+    return (
+        "BOOKING SO FAR (the customer already told you these - never ask again):\n"
+        + "\n".join(known)
+    )
+
+
+async def process_message(message_text: str, conversation_history: list = None, current_state: str = "idle", clinic_data: str = "", therapist_data: str = "", booking_context: dict = None) -> dict:
     """Send message to GPT-4o and get structured response"""
     try:
         # Build system prompt with real clinic data
@@ -83,6 +110,10 @@ async def process_message(message_text: str, conversation_history: list = None, 
             full_prompt += f"\n\nCLINIC DATA (use ONLY these treatments and prices):\n{clinic_data}"
         if therapist_data:
             full_prompt += f"\n\nTHERAPISTS:\n{therapist_data}"
+
+        booking_summary = describe_booking(booking_context or {})
+        if booking_summary:
+            full_prompt += f"\n\n{booking_summary}"
 
         messages = [{"role": "system", "content": full_prompt}]
         
