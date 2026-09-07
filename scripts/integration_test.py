@@ -202,7 +202,94 @@ async def main():
         # Cleanup
         await cleanup([appt_id, amb_id, dup.get("appointment_id")])
 
+    await check_reminders(treatment)
     return summarize()
+
+
+async def check_reminders(treatment):
+    """Reminders, with WhatsApp stubbed out so nothing is actually sent."""
+    print()
+    print("=" * 70)
+    print("REMINDERS")
+    print("=" * 70)
+
+    import uuid
+    from app.services import reminders
+    from app.core.models.appointment import Appointment
+    from app.core.models.customer import Customer
+    from app.core.timeutils import now as clinic_now
+
+    sent = []
+
+    async def fake_send(phone, text):
+        sent.append((phone, text))
+        return True
+
+    real_send = reminders.send_message
+    reminders.send_message = fake_send
+
+    appt_id = None
+    try:
+        async with reminders.async_session() as s:
+            res = await s.execute(select(Customer).where(Customer.phone == TEST_PHONE))
+            customer = res.scalar_one_or_none()
+            if not customer:
+                customer = Customer(
+                    id=uuid.uuid4(), business_id=reminders.BUSINESS_ID,
+                    phone=TEST_PHONE, language="he", conversation_state="idle",
+                )
+                s.add(customer)
+                await s.flush()
+            else:
+                customer.language = "he"
+
+            from app.core.models.therapist import Therapist
+            therapist = (await s.execute(select(Therapist))).scalars().first()
+
+            # Placed squarely inside the 24 hour window.
+            start = clinic_now() + timedelta(hours=23)
+            appt = Appointment(
+                id=uuid.uuid4(), business_id=reminders.BUSINESS_ID,
+                customer_id=customer.id, therapist_id=therapist.id,
+                treatment_id=treatment["id"], start_time=start,
+                end_time=start + timedelta(minutes=60), status="confirmed",
+                reminder_24h_sent=False, reminder_1h_sent=False,
+            )
+            s.add(appt)
+            await s.commit()
+            appt_id = appt.id
+
+        result = await reminders.send_due_reminders()
+        check("24h reminder is sent for an appointment 23h away",
+              result["sent"]["24h"] == 1, str(result["sent"]))
+
+        check("reminder text names the treatment",
+              bool(sent) and treatment["name"] in sent[0][1],
+              sent[0][1] if sent else "nothing sent")
+
+        check("reminder goes to the customer's number",
+              bool(sent) and sent[0][0] == TEST_PHONE)
+
+        before = len(sent)
+        again = await reminders.send_due_reminders()
+        check("running again does not send a duplicate",
+              again["total"] == 0 and len(sent) == before,
+              f"second run sent {again['total']}")
+
+        async with reminders.async_session() as s:
+            row = await s.get(Appointment, appt_id)
+            check("24h flag recorded in the database", row.reminder_24h_sent is True)
+            check("1h flag left alone", row.reminder_1h_sent is False)
+
+    finally:
+        reminders.send_message = real_send
+        if appt_id:
+            async with reminders.async_session() as s:
+                row = await s.get(Appointment, appt_id)
+                if row:
+                    await s.delete(row)
+                await s.commit()
+        await cleanup([])
 
 
 async def cleanup(appointment_ids):

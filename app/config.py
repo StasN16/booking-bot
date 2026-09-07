@@ -8,6 +8,14 @@ class Settings(BaseSettings):
     # Appointment times are interpreted in this zone, so the bot keeps saying
     # the right local time even when the server runs on UTC.
     TIMEZONE: str = "Asia/Jerusalem"
+
+    # Reminders. The in-process loop is enough for a single server; set
+    # REMINDERS_ENABLED=false and drive /api/v1/tasks/reminders from an
+    # external scheduler instead when running more than one instance.
+    REMINDERS_ENABLED: bool = True
+    REMINDER_POLL_MINUTES: int = 10
+    # Shared secret for the reminder endpoint. Blank leaves it closed.
+    TASKS_TOKEN: str = ""
     OPENAI_API_KEY: str = ""
     WHATSAPP_TOKEN: str = ""
     WHATSAPP_VERIFY_TOKEN: str = ""

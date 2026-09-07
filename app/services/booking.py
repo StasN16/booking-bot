@@ -85,6 +85,17 @@ async def _find_conflict(session, therapist_id, start_time, end_time, exclude_id
     return result.scalars().first()
 
 
+async def remember_language(customer_phone: str, language: str):
+    """Store the language the customer writes in, so reminders match it."""
+    if not language or language not in ("he", "en", "ru"):
+        return
+    async with async_session() as session:
+        customer = await _get_customer(session, customer_phone)
+        if customer and customer.language != language:
+            customer.language = language
+            await session.commit()
+
+
 async def _get_customer(session, customer_phone: str):
     result = await session.execute(
         select(Customer).where(
@@ -201,7 +212,8 @@ async def create_appointment(
                 start_time=start_time,
                 end_time=end_time,
                 status="confirmed",
-                reminder_sent=False
+                reminder_24h_sent=False,
+                reminder_1h_sent=False,
             )
             session.add(appointment)
             await session.commit()
@@ -277,7 +289,9 @@ async def reschedule_appointment(
             old_start = appointment.start_time
             appointment.start_time = start_time
             appointment.end_time = end_time
-            appointment.reminder_sent = False
+            # Moved to a new time, so the old reminders no longer apply.
+            appointment.reminder_24h_sent = False
+            appointment.reminder_1h_sent = False
             await session.commit()
 
             therapist = await session.get(Therapist, appointment.therapist_id)

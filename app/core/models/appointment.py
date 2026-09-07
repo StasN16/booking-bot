@@ -32,7 +32,9 @@ class Appointment(TimeStampedModel):
     end_time: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     status: Mapped[str] = mapped_column(String(50), default="confirmed")
     notes: Mapped[str] = mapped_column(String(1000), nullable=True)
-    reminder_sent: Mapped[bool] = mapped_column(Boolean, default=False)
+    # Tracked separately: one flag cannot say which of the two went out.
+    reminder_24h_sent: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    reminder_1h_sent: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     
     business: Mapped["Business"] = relationship("Business")
     customer: Mapped["Customer"] = relationship("Customer", back_populates="appointments")

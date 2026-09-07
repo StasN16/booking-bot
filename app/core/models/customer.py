@@ -17,6 +17,8 @@ class Customer(TimeStampedModel):
     is_blocked: Mapped[bool] = mapped_column(Boolean, default=False)
     conversation_state: Mapped[str] = mapped_column(String(50), nullable=True)
     conversation_data: Mapped[str] = mapped_column(String(5000), nullable=True)
+    # Remembered from the chat so reminders reach people in their own language.
+    language: Mapped[str] = mapped_column(String(5), nullable=True)
     
     business: Mapped["Business"] = relationship("Business", back_populates="customers")
     appointments: Mapped[list] = relationship("Appointment", back_populates="customer")

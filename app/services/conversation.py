@@ -16,6 +16,7 @@ from app.services.booking import (
     cancel_appointment,
     reschedule_appointment,
     get_customer_appointments,
+    remember_language,
 )
 from app.services.date_parser import parse_date
 
@@ -136,6 +137,9 @@ async def handle_message(from_number: str, message_text: str):
                 booking_context[field] = ai_response.get(field)
 
         update_booking_context(from_number, booking_context)
+
+        # Remembered on the customer so reminders go out in this language.
+        await remember_language(from_number, language)
 
         if intention == "check_availability":
             slots_info = await get_real_availability(booking_context, language)
