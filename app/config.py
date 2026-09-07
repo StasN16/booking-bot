@@ -18,8 +18,10 @@ class Settings(BaseSettings):
     TASKS_TOKEN: str = ""
 
     # Pause before replying, so the bot does not answer machine-fast.
-    # Counts directly against how long a customer waits.
-    REPLY_DELAY_SECONDS: float = 2.0
+    # Measured against real traffic this was 2 seconds of a 5.4 second wait,
+    # the largest part anyone here controls, so it is turned down. Half a
+    # second still reads as a person typing rather than a machine answering.
+    REPLY_DELAY_SECONDS: float = 0.5
 
     # Audit trail. One JSON object per operation, written to this file.
     AUDIT_ENABLED: bool = True

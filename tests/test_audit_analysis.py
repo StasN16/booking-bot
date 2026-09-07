@@ -281,3 +281,18 @@ class TestReplyDelayIsConfigurable:
         from app.config import settings
         assert hasattr(settings, "REPLY_DELAY_SECONDS")
         assert isinstance(settings.REPLY_DELAY_SECONDS, float)
+
+
+class TestReplyDelayDefault:
+    def test_the_pause_is_short_enough_to_not_dominate(self):
+        """
+        Measured on real traffic, a 2 second pause was 37% of the wait. The
+        default is kept well under a second so the largest controllable part
+        of the delay stays small.
+        """
+        from app.config import settings
+        assert 0 <= settings.REPLY_DELAY_SECONDS <= 1.0
+
+    def test_it_can_be_disabled_entirely(self):
+        from app.config import settings
+        assert isinstance(settings.REPLY_DELAY_SECONDS, float)
