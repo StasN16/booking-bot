@@ -83,6 +83,13 @@ class TestNothingIsParsedAsHtml:
             assert pattern not in text, f"{pattern} in {path.name}"
 
 
+class TestReadsRightInHebrew:
+    @pytest.mark.parametrize("path", SCRIPTS, ids=lambda p: p.name)
+    def test_hours_are_never_a_native_time_field(self, path):
+        """On a Hebrew page Safari shows one as 00:09 for 09:00. timeSelect() reads right."""
+        assert "type: 'time'" not in path.read_text(encoding="utf-8"), path.name
+
+
 class TestFilesFitThePolicy:
     def test_the_page_has_no_inline_script_or_style(self):
         html = (DASHBOARD / "index.html").read_text(encoding="utf-8")

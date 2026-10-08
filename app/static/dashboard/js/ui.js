@@ -158,6 +158,24 @@ export function field(label, control, { hint, className } = {}) {
   return h('div', { class: ['field', className] }, h('label', { for: control.id }, label), control, hintEl);
 }
 
+const QUARTER_HOURS = Array.from({ length: 96 }, (_, i) =>
+  `${String(Math.floor(i / 4)).padStart(2, '0')}:${String((i % 4) * 15).padStart(2, '0')}`);
+
+/**
+ * A time of day, picked from a list of quarter hours. Not <input type=time>:
+ * on a Hebrew page Safari lays its hours and minutes out right to left, so
+ * 09:00 shows as 00:09. Plain "09:00" text reads the same in every browser.
+ * A time saved earlier that is not on a quarter hour stays in the list.
+ * `optional` adds a blank choice, for hours that may be left unset.
+ */
+export function timeSelect(value, { optional = false, required = false } = {}) {
+  const current = (value || '').slice(0, 5);
+  const times = !current || QUARTER_HOURS.includes(current) ? QUARTER_HOURS : [...QUARTER_HOURS, current].sort();
+  return h('select', { class: 'time-select', required, value: current },
+    optional ? h('option', { value: '' }, '—') : null,
+    times.map((time) => h('option', { value: time }, time)));
+}
+
 /** An on/off switch: a real checkbox, drawn as a switch. */
 export function toggle(label, { checked = false, onchange } = {}) {
   const input = h('input', { type: 'checkbox', role: 'switch', checked, onchange });

@@ -3,7 +3,7 @@
  */
 import { api } from '../api.js';
 import { getLang, t } from '../i18n.js';
-import { busy, field, fill, h, icon, ltr, toast, uid } from '../ui.js';
+import { busy, field, fill, h, icon, ltr, timeSelect, toast, uid } from '../ui.js';
 
 export default function settingsView(container, params, ctx) {
   const b = ctx.business || {};
@@ -11,8 +11,8 @@ export default function settingsView(container, params, ctx) {
   const phone = h('input', { type: 'tel', dir: 'ltr', required: true, maxlength: 20, value: b.phone || '' });
   const email = h('input', { type: 'email', dir: 'ltr', maxlength: 255, value: b.email || '' });
   const address = h('input', { type: 'text', maxlength: 500, value: b.address || '' });
-  const open = h('input', { type: 'time', step: 300, value: b.working_hours_start || '' });
-  const close = h('input', { type: 'time', step: 300, value: b.working_hours_end || '' });
+  const open = timeSelect(b.working_hours_start, { optional: true });
+  const close = timeSelect(b.working_hours_end, { optional: true });
   const error = h('p', { class: 'form-error', role: 'alert' });
   const formId = uid('form');
   const submit = h('button', { class: 'btn btn-primary', type: 'submit', form: formId }, t('common.save'));

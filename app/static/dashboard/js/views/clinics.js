@@ -6,7 +6,7 @@
 import { api } from '../api.js';
 import { fmt, t } from '../i18n.js';
 import {
-  badge, busy, confirmDialog, errorBox, field, fill, h, icon, ltr, modal, notice, spinner, toast, toggle, uid,
+  badge, busy, confirmDialog, errorBox, field, fill, h, icon, ltr, modal, notice, spinner, timeSelect, toast, toggle, uid,
 } from '../ui.js';
 
 const PHONE_NUMBER_ID = /^\d{5,30}$/;
@@ -74,8 +74,8 @@ export default function clinicsView(container, params, ctx) {
     const phone = h('input', { type: 'tel', dir: 'ltr', required: true, maxlength: 20, value: value('phone') });
     const email = h('input', { type: 'email', dir: 'ltr', maxlength: 255, value: value('email') });
     const address = h('input', { type: 'text', maxlength: 500, value: value('address') });
-    const open = h('input', { type: 'time', step: 300, value: value('working_hours_start', '09:00') });
-    const close = h('input', { type: 'time', step: 300, value: value('working_hours_end', '19:00') });
+    const open = timeSelect(value('working_hours_start', '09:00'), { optional: true });
+    const close = timeSelect(value('working_hours_end', '19:00'), { optional: true });
     const number = h('input', { type: 'text', dir: 'ltr', inputmode: 'numeric', maxlength: 30, autocomplete: 'off', value: value('whatsapp_phone_id') });
     const hasToken = editing && clinic.has_own_token;
     const token = h('input', { type: 'password', dir: 'ltr', maxlength: 500, autocomplete: 'off', placeholder: hasToken ? '••••••••' : '' });
@@ -163,17 +163,18 @@ export default function clinicsView(container, params, ctx) {
   async function openLogins(clinic) {
     const m = modal({ title: t('logins.title', { name: clinic.name }), wide: true });
     const listBox = h('div', { class: 'stack' }, spinner());
-    const email = h('input', { type: 'email', dir: 'ltr', required: true, maxlength: 255, autocomplete: 'off', placeholder: 'name@clinic.co.il' });
+    const email = h('input', { type: 'email', dir: 'ltr', required: true, maxlength: 255, autocomplete: 'off', placeholder: 'name@example.co.il' });
     const name = h('input', { type: 'text', maxlength: 255, autocomplete: 'off' });
     const error = h('p', { class: 'form-error', role: 'alert' });
     const create = h('button', { class: 'btn btn-primary', type: 'submit' }, icon('plus'), h('span', {}, t('logins.create')));
 
     fill(m.body,
+      h('p', { class: 'muted' }, t('logins.intro', { name: clinic.name })),
       listBox,
       h('section', { class: 'panel' },
         h('h3', { class: 'panel-title' }, t('logins.add')),
         h('form', { class: 'form-grid', novalidate: true, onsubmit: add },
-          field(t('logins.email'), email),
+          field(t('logins.email'), email, { hint: t('logins.emailHint') }),
           field(t('logins.name'), name, { hint: t('common.optional') }),
           h('div', { class: 'span-2' }, error),
           h('div', { class: 'span-2 button-row end' }, create))));

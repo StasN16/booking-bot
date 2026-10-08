@@ -5,7 +5,7 @@
 import { api } from '../api.js';
 import * as D from '../dates.js';
 import { fmt, t } from '../i18n.js';
-import { badge, busy, confirmDialog, empty, field, fill, h, icon, ltr, modal, toast } from '../ui.js';
+import { badge, busy, confirmDialog, empty, field, fill, h, icon, ltr, modal, timeSelect, toast } from '../ui.js';
 import { sameName } from '../util.js';
 
 export default function teamView(container, params, ctx) {
@@ -83,8 +83,8 @@ export default function teamView(container, params, ctx) {
       const input = h('input', { type: 'checkbox', value: day, checked: working.has(day) });
       return { day, input, el: h('label', { class: 'day-toggle' }, input, h('span', {}, fmt.dayName(day, 'short'))) };
     });
-    const start = h('input', { type: 'time', step: 300, required: true, value: therapist ? therapist.working_hours_start || '09:00' : '09:00' });
-    const end = h('input', { type: 'time', step: 300, required: true, value: therapist ? therapist.working_hours_end || '18:00' : '18:00' });
+    const start = timeSelect(therapist ? therapist.working_hours_start || '09:00' : '09:00', { required: true });
+    const end = timeSelect(therapist ? therapist.working_hours_end || '18:00' : '18:00', { required: true });
     const error = h('p', { class: 'form-error', role: 'alert' });
     const formId = `team-form-${Date.now()}`;
     const submit = h('button', { class: 'btn btn-primary', type: 'submit', form: formId }, t('common.save'));

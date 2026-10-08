@@ -3,7 +3,7 @@
 A WhatsApp assistant that books, moves and cancels appointments for
 clinics, plus a web dashboard where each clinic sees and manages its own.
 One server runs any number of clinics. Each has its own WhatsApp number,
-dashboard and login, and sees only its own data.
+dashboard and users, and sees only its own data.
 
 - **The bot** answers customers on WhatsApp in Hebrew, English or Russian,
   offers only times that are really free, and books through the same rules
@@ -74,7 +74,7 @@ line.
 
 | Page | What it does |
 |---|---|
-| Clinics | Only for you, the owner. Add clinics, set their WhatsApp numbers and logins, and open any clinic's dashboard. |
+| Clinics | Only for you, the owner. Add clinics, set their WhatsApp numbers and users, and open any clinic's dashboard. |
 | Calendar | Day (a column per therapist), week or month. Click free time to book there; click an appointment to open it. Bookings made on WhatsApp appear within a minute. |
 | Appointments | Every appointment in a range of dates, with filters by status and therapist and a search by name, phone or treatment. |
 | Customers | Everyone who has written to the bot or been booked. Each card shows the customer's history and lets you turn their reminders off. |
@@ -105,9 +105,10 @@ Clinics page, no other clinic's customers.
    and hours, and paste the Phone number ID. Leave **WhatsApp token**
    empty: it is needed only when the number sits in the clinic's own Meta
    account rather than yours.
-4. **Add its login.** The logins window opens by itself. Type the clinic's
-   email and press **Create login**. The password is shown **once**: copy
-   it and send it to the clinic privately.
+4. **Add its user.** The **Users** window opens by itself. A user is the
+   email and password the clinic signs in with. Type the clinic's email and
+   press **Create user**. The password is shown **once**: copy it and send
+   it to the clinic privately.
 5. **Add its team and treatments.** Press **Open dashboard** on the
    clinic's card, or leave this to the clinic. The bot answers on the new
    number at once, and can book as soon as both exist.
@@ -121,9 +122,9 @@ WhatsApp → Configuration → Webhook fields has `messages` subscribed.
 | To | Do this |
 |---|---|
 | See a clinic's dashboard | Clinics → **Open dashboard**. On a computer, the menu under the clinic's name switches too. |
-| Give a clinic a new password | Clinics → **Logins** → **New password**. The old one stops working. |
-| Lock a login out | Clinics → **Logins**, switch **Can sign in** off. It is signed out at once. |
-| Pause a clinic | Clinics → **Edit**, switch **Clinic is active** off. Its logins, bot and reminders stop; its data stays. |
+| Give a clinic a new password | Clinics → **Users** → **New password**. The old one stops working. |
+| Lock a user out | Clinics → **Users**, switch **Dashboard access** off. They are signed out at once. |
+| Pause a clinic | Clinics → **Edit**, switch **Clinic is active** off. Its users, bot and reminders stop; its data stays. |
 
 A clinic changes its own password in Settings. The **main clinic** is the
 one `BUSINESS_ID` in `.env` names: the one you see first, and the only one
@@ -180,9 +181,9 @@ app/
   main.py           the server: routes, dashboard files, reminder and audit loops
   api/v1/           webhook (WhatsApp), auth, appointments, customers, therapists,
                     treatments, business: the API the dashboard calls;
-                    platform: the owner's clinics and logins
+                    platform: the owner's clinics and their users
   services/         conversation (the bot), ai_engine (GPT-4o), booking,
-                    availability, reminders, whatsapp, accounts (logins),
+                    availability, reminders, whatsapp, accounts (clinic users),
                     audit analysis
   core/             models, schemas, database, timezone helpers, audit trail,
                     tenancy (which clinic is being served, and its number)
@@ -200,7 +201,7 @@ Every request, WhatsApp message and reminder is handled on behalf of one
 clinic, and everything that reads or writes clinic data asks
 `current_business_id()` (`app/core/tenancy.py`) which one that is. A
 message finds its clinic by the WhatsApp number it was sent to; a
-dashboard request, by the login it carries.
+dashboard request, by who is signed in.
 
 The dashboard builds everything on the page from plain text, never from
 HTML, and the server forbids inline scripts. A customer's name or note can
@@ -212,7 +213,7 @@ only ever be displayed, never run.
 |---|---|
 | The bot does not answer | Is `start.sh` running? Did it warn that the webhook URL changed? Then check the token: `poetry run python scripts/configure.py --check`. |
 | One clinic's bot does not answer | On the Clinics page, check that the clinic is on and its Phone number ID matches Meta's. The Terminal running `start.sh` names any number no clinic has. |
-| A clinic cannot sign in | Clinics → **Logins**: is **Can sign in** on? If they lost the password, press **New password**. |
+| A clinic cannot sign in | Clinics → **Users**: is **Dashboard access** on? If they lost the password, press **New password**. |
 | `configure.py --check` says Meta rejected the WhatsApp token | Generate a new token for the system user in Meta Business settings and put it in `.env` as `WHATSAPP_TOKEN`. |
 | "Port 8000 is already in use" | The bot is already running in another Terminal window. Use that one, or stop it there with `Ctrl+C`. |
 | The dashboard says sign-in is not set up | Run `./scripts/setup_mac.sh`, then start the server again. |
