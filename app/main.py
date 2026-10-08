@@ -1,13 +1,17 @@
 import asyncio
 import logging
 from contextlib import asynccontextmanager
+from pathlib import Path
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
+from fastapi.responses import RedirectResponse
+from fastapi.staticfiles import StaticFiles
 
 from app.config import settings
 from app.api.v1 import (
     appointments,
     auth,
+    business,
     customers,
     tasks,
     therapists,
@@ -92,11 +96,45 @@ app.include_router(appointments.router, prefix="/api/v1")
 app.include_router(therapists.router, prefix="/api/v1")
 app.include_router(treatments.router, prefix="/api/v1")
 app.include_router(customers.router, prefix="/api/v1")
+app.include_router(business.router, prefix="/api/v1")
 
 
-@app.get("/")
+# --- dashboard ---------------------------------------------------------------
+
+DASHBOARD_DIR = Path(__file__).resolve().parent / "static" / "dashboard"
+
+# Scripts and styles only from this server. Customer names and notes are
+# shown on the dashboard and can originate outside the clinic, so even if
+# one slipped past escaping, the browser would refuse to run it.
+DASHBOARD_HEADERS = {
+    "Content-Security-Policy": (
+        "default-src 'self'; script-src 'self'; style-src 'self'; "
+        "img-src 'self' data:; connect-src 'self'; font-src 'self'; "
+        "frame-ancestors 'none'; base-uri 'self'; form-action 'self'"
+    ),
+    "X-Content-Type-Options": "nosniff",
+    "Referrer-Policy": "no-referrer",
+    # Revalidate every load, so a dashboard updated by `git pull` is the one
+    # the browser shows. Unchanged files still answer 304, so this is cheap.
+    "Cache-Control": "no-cache",
+}
+
+
+@app.middleware("http")
+async def dashboard_headers(request: Request, call_next):
+    response = await call_next(request)
+    if request.url.path.startswith("/dashboard"):
+        for name, value in DASHBOARD_HEADERS.items():
+            response.headers[name] = value
+    return response
+
+
+app.mount("/dashboard", StaticFiles(directory=DASHBOARD_DIR, html=True), name="dashboard")
+
+
+@app.get("/", include_in_schema=False)
 async def root():
-    return {"status": "ok", "message": "Bot is running!"}
+    return RedirectResponse("/dashboard/")
 
 
 @app.get("/health")

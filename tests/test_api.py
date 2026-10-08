@@ -204,11 +204,195 @@ class TestEveryManagementRouterIsProtected:
         Auth is declared on the router, not per endpoint, so a new endpoint
         cannot be added without it. This checks that stays true.
         """
-        from app.api.v1 import appointments, customers, therapists, treatments
+        from app.api.v1 import (appointments, business, customers,
+                                therapists, treatments)
 
-        for module in (appointments, customers, therapists, treatments):
+        for module in (appointments, business, customers, therapists, treatments):
             names = [
                 getattr(d.dependency, "__name__", "")
                 for d in module.router.dependencies
             ]
             assert "current_user" in names, f"{module.__name__} is unprotected"
+
+
+class TestPhoneNormalization:
+    """
+    The bot knows customers by the number WhatsApp sends. A number typed in
+    the dashboard has to reach the same form, or the same person becomes
+    two customers and their reminders go to a number WhatsApp cannot reach.
+    """
+
+    @pytest.mark.parametrize("typed", [
+        "054-338-1998", "0543381998", "+972 54-338-1998", "972543381998",
+        "00972543381998", "+972-54-338-1998", " 054 338 1998 ",
+    ])
+    def test_every_spelling_of_one_number_is_one_customer(self, typed):
+        from app.core.schemas.api import normalize_phone
+        assert normalize_phone(typed) == "972543381998"
+
+    def test_a_foreign_number_keeps_its_country_code(self):
+        from app.core.schemas.api import normalize_phone
+        assert normalize_phone("+1 (555) 139-0508") == "15551390508"
+
+    @pytest.mark.parametrize("bad", ["", None, "12", "abc", "1" * 16])
+    def test_impossible_numbers_are_rejected(self, bad):
+        from app.core.schemas.api import normalize_phone
+        assert normalize_phone(bad) is None
+
+    def test_booking_normalizes_the_number(self):
+        from app.core.schemas.api import AppointmentIn
+        body = AppointmentIn(customer_phone="054-338-1998", treatment_name="x",
+                             date="2027-06-25", time="10:00")
+        assert body.customer_phone == "972543381998"
+
+    def test_booking_rejects_a_bad_number(self):
+        from pydantic import ValidationError
+        from app.core.schemas.api import AppointmentIn
+        with pytest.raises(ValidationError):
+            AppointmentIn(customer_phone="12345", treatment_name="x",
+                          date="2027-06-25", time="10:00")
+
+
+class TestBusinessDetails:
+    def test_whatsapp_credentials_are_never_serialized(self):
+        """The business row stores the WhatsApp token; the API must not."""
+        from types import SimpleNamespace
+        from app.api.v1.business import serialize
+        row = SimpleNamespace(
+            id="550e8400-e29b-41d4-a716-446655440000", name="Clinic",
+            phone="0501234567", email=None, address=None,
+            working_hours_start="09:00", working_hours_end="20:00",
+            whatsapp_token="EAAG-secret", whatsapp_phone_id="123")
+        out = serialize(row)
+        assert "EAAG-secret" not in str(out)
+        assert not any(key.startswith("whatsapp") for key in out)
+
+    def test_the_schema_has_no_credential_fields(self):
+        from app.core.schemas.api import BusinessOut
+        assert not any("whatsapp" in field for field in BusinessOut.model_fields)
+
+    def test_hours_are_validated(self):
+        from pydantic import ValidationError
+        from app.core.schemas.api import BusinessUpdate
+        assert BusinessUpdate(working_hours_start="9:00").working_hours_start == "09:00"
+        with pytest.raises(ValidationError):
+            BusinessUpdate(working_hours_end="25:00")
+
+
+class TestLoginRateLimit:
+    @pytest.fixture(autouse=True)
+    def fresh(self):
+        from app.api.v1 import auth
+        auth.reset()
+        yield
+        auth.reset()
+
+    def test_a_few_mistakes_are_allowed(self):
+        from app.api.v1 import auth
+        for _ in range(auth.MAX_FAILURES - 1):
+            auth.record_failure("1.2.3.4")
+        assert auth.seconds_blocked("1.2.3.4") == 0
+
+    def test_too_many_mistakes_block_that_address(self):
+        from app.api.v1 import auth
+        for _ in range(auth.MAX_FAILURES):
+            auth.record_failure("1.2.3.4")
+        assert auth.seconds_blocked("1.2.3.4") > 0
+
+    def test_other_addresses_are_unaffected(self):
+        from app.api.v1 import auth
+        for _ in range(auth.MAX_FAILURES):
+            auth.record_failure("1.2.3.4")
+        assert auth.seconds_blocked("5.6.7.8") == 0
+
+    def test_the_block_expires(self, monkeypatch):
+        from app.api.v1 import auth
+        clock = [1000.0]
+        monkeypatch.setattr(auth.time, "monotonic", lambda: clock[0])
+        for _ in range(auth.MAX_FAILURES):
+            auth.record_failure("1.2.3.4")
+        assert auth.seconds_blocked("1.2.3.4") > 0
+        clock[0] += auth.WINDOW_SECONDS + 1
+        assert auth.seconds_blocked("1.2.3.4") == 0
+
+    def test_memory_is_bounded(self):
+        from app.api.v1 import auth
+        for i in range(auth.MAX_TRACKED + 50):
+            auth.record_failure(f"10.0.{i // 256}.{i % 256}")
+        assert len(auth._failures) <= auth.MAX_TRACKED
+
+
+class TestLoginEndpoint:
+    """Through the real app, with no database needed."""
+
+    @pytest.fixture
+    def client(self, monkeypatch):
+        from fastapi.testclient import TestClient
+        from app.api.v1 import auth
+        from app.main import app
+        monkeypatch.setattr(settings, "JWT_SECRET", "test-secret")
+        monkeypatch.setattr(settings, "ADMIN_PASSWORD", "correct-horse")
+        auth.reset()
+        yield TestClient(app)
+        auth.reset()
+
+    def test_right_password_gets_a_token(self, client):
+        response = client.post("/api/v1/auth/login", json={"password": "correct-horse"})
+        assert response.status_code == 200
+        assert response.json()["access_token"]
+
+    def test_wrong_password_is_refused(self, client):
+        response = client.post("/api/v1/auth/login", json={"password": "nope"})
+        assert response.status_code == 401
+
+    def test_repeated_guessing_is_stopped(self, client):
+        from app.api.v1 import auth
+        for _ in range(auth.MAX_FAILURES):
+            client.post("/api/v1/auth/login", json={"password": "nope"})
+        response = client.post("/api/v1/auth/login", json={"password": "correct-horse"})
+        assert response.status_code == 429
+        assert int(response.headers["Retry-After"]) > 0
+
+    def test_a_success_clears_earlier_mistakes(self, client):
+        from app.api.v1 import auth
+        for _ in range(auth.MAX_FAILURES - 1):
+            client.post("/api/v1/auth/login", json={"password": "nope"})
+        client.post("/api/v1/auth/login", json={"password": "correct-horse"})
+        for _ in range(auth.MAX_FAILURES - 1):
+            client.post("/api/v1/auth/login", json={"password": "nope"})
+        assert client.post("/api/v1/auth/login",
+                           json={"password": "correct-horse"}).status_code == 200
+
+
+class TestDashboardServing:
+    @pytest.fixture
+    def client(self):
+        from fastapi.testclient import TestClient
+        from app.main import app
+        return TestClient(app)
+
+    def test_the_root_leads_to_the_dashboard(self, client):
+        response = client.get("/", follow_redirects=False)
+        assert response.status_code in (302, 307)
+        assert response.headers["location"] == "/dashboard/"
+
+    def test_the_dashboard_page_is_served(self, client):
+        response = client.get("/dashboard/")
+        assert response.status_code == 200
+        assert "text/html" in response.headers["content-type"]
+
+    def test_scripts_are_limited_to_this_server(self, client):
+        csp = client.get("/dashboard/").headers["content-security-policy"]
+        assert "script-src 'self'" in csp
+        assert "unsafe-inline" not in csp
+
+    def test_the_page_cannot_be_framed(self, client):
+        csp = client.get("/dashboard/").headers["content-security-policy"]
+        assert "frame-ancestors 'none'" in csp
+
+    def test_assets_are_revalidated(self, client):
+        assert client.get("/dashboard/").headers["cache-control"] == "no-cache"
+
+    def test_api_responses_do_not_get_dashboard_headers(self, client):
+        response = client.get("/health")
+        assert "content-security-policy" not in response.headers

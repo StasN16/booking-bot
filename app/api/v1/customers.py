@@ -1,6 +1,7 @@
 """Reading and lightly editing customer records."""
 import logging
 import uuid
+from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import func, select
@@ -42,8 +43,8 @@ async def get_or_404(session, customer_id: str) -> Customer:
 
 @router.get("/customers", response_model=list[CustomerOut])
 async def list_customers(
-    search: str | None = Query(default=None, description="name or phone"),
-    limit: int = Query(default=200, ge=1, le=1000),
+    search: Annotated[str | None, Query(description="name or phone")] = None,
+    limit: Annotated[int, Query(ge=1, le=1000)] = 200,
 ):
     async with async_session() as session:
         query = select(Customer).where(Customer.business_id == BUSINESS_ID)

@@ -205,6 +205,7 @@ async def main():
     await check_reminders(treatment)
     await check_session_persistence()
     await check_audit_trail(treatment)
+    await check_dashboard_api(treatment)
     return summarize()
 
 
@@ -455,6 +456,100 @@ async def check_reminders(treatment):
                     await s.delete(row)
                 await s.commit()
         await cleanup([])
+
+
+async def check_dashboard_api(treatment):
+    """The endpoints the dashboard relies on, called against the real database."""
+    print()
+    print("=" * 70)
+    print("DASHBOARD API")
+    print("=" * 70)
+
+    from fastapi import HTTPException
+    from app.api.v1 import appointments as api
+    from app.api.v1 import business as business_api
+    from app.core.schemas.api import AppointmentIn, AppointmentNotes
+    from app.core.timeutils import now as clinic_now
+
+    # A number typed the way a person would, Israeli local format.
+    typed_phone = "050-000-0999"
+    booked_id = None
+
+    try:
+        day = clinic_now().date() + timedelta(days=1)
+        for _ in range(10):
+            free = await api.availability(treatment_id=treatment["id"], date=day.isoformat())
+            if free["slots"]:
+                break
+            day += timedelta(days=1)
+        check("availability offers slots on a working day", bool(free["slots"]),
+              f"{day}: {len(free['slots'])} slots")
+        slot = free["slots"][0]
+
+        created = await api.book_appointment(AppointmentIn(
+            customer_phone=typed_phone, customer_name="Dashboard Test",
+            treatment_name=treatment["name"], therapist_name=slot["therapist_name"],
+            date=day.isoformat(), time=slot["time"], notes="first visit"))
+        booked_id = created["id"]
+        check("a typed local number is stored the way WhatsApp sends it",
+              created["customer_phone"] == TEST_PHONE, created["customer_phone"])
+        check("the name typed by the clinic is saved",
+              created["customer_name"] == "Dashboard Test")
+        check("the note is saved", created["notes"] == "first visit")
+        check("ids and duration come back for the calendar",
+              created["treatment_id"] == treatment["id"]
+              and created["duration_minutes"] == treatment["duration_minutes"])
+
+        after = await api.availability(treatment_id=treatment["id"], date=day.isoformat(),
+                                       therapist_id=slot["therapist_id"])
+        times = [s["time"] for s in after["slots"]]
+        check("the booked time is no longer offered for that therapist",
+              slot["time"] not in times, slot["time"])
+
+        moving = await api.availability(treatment_id=treatment["id"], date=day.isoformat(),
+                                        therapist_id=slot["therapist_id"],
+                                        exclude_appointment_id=booked_id)
+        check("excluding the booking offers its own time again, for moving it",
+              slot["time"] in [s["time"] for s in moving["slots"]])
+
+        past = await api.availability(treatment_id=treatment["id"], date="2020-01-01")
+        check("a past date offers nothing", past["slots"] == [])
+
+        edited = await api.edit_notes(booked_id, AppointmentNotes(notes="prefers firm pressure"))
+        check("notes can be edited", edited["notes"] == "prefers firm pressure")
+        cleared = await api.edit_notes(booked_id, AppointmentNotes(notes="   "))
+        check("blank notes are cleared", cleared["notes"] is None)
+
+        by_phone = await api.list_appointments(customer_phone=typed_phone, from_date=None,
+                                               to_date=None, status=None, therapist_id=None,
+                                               limit=50)
+        check("filtering by a typed number finds the customer's history",
+              any(a["id"] == booked_id for a in by_phone), f"{len(by_phone)} found")
+
+        stats = await api.statistics(from_date=day.isoformat(), to_date=day.isoformat())
+        today_row = stats["by_day"][0] if stats["by_day"] else {}
+        check("statistics count the booking per day",
+              len(stats["by_day"]) == 1 and today_row.get("appointments", 0) >= 1,
+              str(today_row))
+        check("revenue is the treatment's price",
+              stats["revenue"] >= treatment["price"], f"{stats['revenue']}")
+
+        wide = await api.statistics(from_date="2027-01-01", to_date="2027-01-31")
+        check("every day of a range is present, with zeros", len(wide["by_day"]) == 31)
+
+        try:
+            await api.statistics(from_date="2025-01-01", to_date="2027-01-01")
+            check("an over-long range is refused", False)
+        except HTTPException as e:
+            check("an over-long range is refused", e.status_code == 400)
+
+        info = await business_api.get_business()
+        check("business details load", bool(info["name"]), info["name"])
+        check("business details carry no WhatsApp credentials",
+              not any(k.startswith("whatsapp") for k in info))
+
+    finally:
+        await cleanup([booked_id])
 
 
 async def cleanup(appointment_ids):

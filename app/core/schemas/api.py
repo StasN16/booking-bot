@@ -10,6 +10,31 @@ from datetime import date, datetime
 from pydantic import BaseModel, Field, field_validator
 
 
+# --- phone numbers ---------------------------------------------------------
+
+def normalize_phone(value: str | None) -> str | None:
+    """
+    Write a phone number the way WhatsApp sends it: digits only, country
+    code first, no leading + or 00.
+
+    The bot learns customers from WhatsApp, so "054-338-1998" typed in the
+    dashboard has to become "972543381998" or it would create a second
+    customer, and that customer's reminders would go to a number WhatsApp
+    cannot reach. A number with a single leading 0 is taken as Israeli, as
+    this clinic's customers are; anything else must include its country code.
+    """
+    if not value:
+        return None
+    digits = "".join(ch for ch in str(value) if ch.isdigit())
+    if digits.startswith("00"):
+        digits = digits[2:]                      # 00 international prefix
+    elif digits.startswith("0") and len(digits) in (9, 10):
+        digits = "972" + digits[1:]              # Israeli local number
+    if not 8 <= len(digits) <= 15:               # E.164 allows at most 15
+        return None
+    return digits
+
+
 # --- auth ------------------------------------------------------------------
 
 class LoginRequest(BaseModel):
@@ -132,15 +157,31 @@ class TherapistOut(BaseModel):
 
 class AppointmentIn(BaseModel):
     customer_phone: str = Field(min_length=5, max_length=20)
+    # A name typed by the clinic, for customers who booked by phone call.
+    customer_name: str | None = Field(default=None, max_length=255)
     treatment_name: str
     therapist_name: str | None = None
     date: str = Field(examples=["2027-06-25"])
     time: str = Field(examples=["14:00"])
+    notes: str | None = Field(default=None, max_length=1000)
+
+    @field_validator("customer_phone")
+    @classmethod
+    def as_whatsapp_number(cls, value: str) -> str:
+        normalized = normalize_phone(value)
+        if normalized is None:
+            raise ValueError("Expected a phone number, e.g. 054-338-1998 "
+                             "or 972543381998")
+        return normalized
 
 
 class AppointmentReschedule(BaseModel):
     date: str
     time: str
+
+
+class AppointmentNotes(BaseModel):
+    notes: str | None = Field(default=None, max_length=1000)
 
 
 class AppointmentOut(BaseModel):
@@ -149,13 +190,59 @@ class AppointmentOut(BaseModel):
     date: str
     time: str
     end_time: str
+    duration_minutes: int | None = None
     treatment: str | None = None
+    treatment_id: str | None = None
     therapist: str | None = None
+    therapist_id: str | None = None
+    customer_id: str | None = None
     customer_name: str | None = None
     customer_phone: str | None = None
     price: int | None = None
+    notes: str | None = None
     reminder_24h_sent: bool = False
     reminder_1h_sent: bool = False
+
+
+# --- availability ----------------------------------------------------------
+
+class SlotOut(BaseModel):
+    time: str
+    therapist_id: str
+    therapist_name: str
+
+
+class AvailabilityOut(BaseModel):
+    date: str
+    treatment_id: str
+    treatment: str
+    duration_minutes: int
+    slots: list[SlotOut]
+
+
+# --- business --------------------------------------------------------------
+
+class BusinessOut(BaseModel):
+    # The WhatsApp credentials stored on this row are deliberately absent.
+    id: str
+    name: str
+    phone: str
+    email: str | None = None
+    address: str | None = None
+    working_hours_start: str | None = None
+    working_hours_end: str | None = None
+
+
+class BusinessUpdate(BaseModel):
+    name: str | None = Field(default=None, min_length=1, max_length=255)
+    phone: str | None = Field(default=None, min_length=5, max_length=20)
+    email: str | None = Field(default=None, max_length=255)
+    address: str | None = Field(default=None, max_length=500)
+    working_hours_start: str | None = None
+    working_hours_end: str | None = None
+
+    _start = field_validator("working_hours_start")(validate_hhmm)
+    _end = field_validator("working_hours_end")(validate_hhmm)
 
 
 # --- customers -------------------------------------------------------------
@@ -177,11 +264,19 @@ class CustomerUpdate(BaseModel):
 
 # --- statistics ------------------------------------------------------------
 
+class DayStats(BaseModel):
+    date: str
+    appointments: int
+    revenue: int
+
+
 class StatsOut(BaseModel):
     from_date: str
     to_date: str
     appointments: int
     cancelled: int
     revenue: int
+    cancellation_rate: float
     by_treatment: dict[str, int]
     by_therapist: dict[str, int]
+    by_day: list[DayStats]

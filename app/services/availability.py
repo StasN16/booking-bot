@@ -144,8 +144,14 @@ def compute_available_slots(
     return available_slots
 
 
-async def get_available_slots(treatment_id: str, target_date: date) -> list:
-    """Get available time slots for a treatment on a specific date"""
+async def get_available_slots(treatment_id: str, target_date: date,
+                              exclude_appointment_id=None) -> list:
+    """
+    Get available time slots for a treatment on a specific date.
+
+    `exclude_appointment_id` leaves one booking out of the conflict check, so
+    rescheduling an appointment can offer times that overlap where it is now.
+    """
     async with async_session() as session:
         treatment = await session.get(Treatment, treatment_id)
         if not treatment:
@@ -159,18 +165,20 @@ async def get_available_slots(treatment_id: str, target_date: date) -> list:
         )
         therapists = result.scalars().all()
 
-        start_of_day = datetime.combine(target_date, datetime.min.time())
-        end_of_day = datetime.combine(target_date, datetime.max.time())
+        # The clinic's day, not UTC's: naive bounds against a timezone-aware
+        # column are read as UTC, which shifts the day by the clinic's offset.
+        start_of_day = to_clinic_tz(datetime.combine(target_date, time.min))
+        end_of_day = to_clinic_tz(datetime.combine(target_date, time.max))
 
-        result = await session.execute(
-            select(Appointment).where(
-                Appointment.business_id == BUSINESS_ID,
-                Appointment.start_time >= start_of_day,
-                Appointment.start_time <= end_of_day,
-                Appointment.status == "confirmed"
-            )
+        query = select(Appointment).where(
+            Appointment.business_id == BUSINESS_ID,
+            Appointment.start_time >= start_of_day,
+            Appointment.start_time <= end_of_day,
+            Appointment.status == "confirmed"
         )
-        existing_appointments = result.scalars().all()
+        if exclude_appointment_id is not None:
+            query = query.where(Appointment.id != exclude_appointment_id)
+        existing_appointments = (await session.execute(query)).scalars().all()
 
         slots = compute_available_slots(
             therapists=therapists,
