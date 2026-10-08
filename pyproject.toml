@@ -5,7 +5,7 @@ description = "WhatsApp AI Booking Bot"
 authors = [
     {name = "Stas Nazarov",email = "stasn16@gmail.com"}
 ]
-requires-python = "^3.12"
+requires-python = ">=3.12,<4.0"
 dependencies = [
     "fastapi (>=0.135.1,<0.136.0)",
     "uvicorn (>=0.41.0,<0.42.0)",
@@ -29,11 +29,14 @@ dependencies = [
 ]
 
 
-[project.optional-dependencies]
-dev = [
-    "pytest (>=8.0.0)",
-    "pytest-asyncio (>=0.24.0)"
-]
+[tool.poetry]
+# This is an application, not a library: there is no package to install, only
+# dependencies. Without this, `poetry install` fails looking for one.
+package-mode = false
+
+[tool.poetry.group.dev.dependencies]
+pytest = ">=8.0.0"
+pytest-asyncio = ">=0.24.0"
 
 
 [build-system]
@@ -43,4 +46,5 @@ build-backend = "poetry.core.masonry.api"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+pythonpath = ["."]
 asyncio_mode = "auto"
