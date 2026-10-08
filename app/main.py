@@ -14,6 +14,7 @@ from app.api.v1 import (
     auth,
     business,
     customers,
+    platform,
     tasks,
     therapists,
     treatments,
@@ -105,6 +106,8 @@ app.include_router(therapists.router, prefix="/api/v1")
 app.include_router(treatments.router, prefix="/api/v1")
 app.include_router(customers.router, prefix="/api/v1")
 app.include_router(business.router, prefix="/api/v1")
+# The owner's side: clinics, their numbers and logins.
+app.include_router(platform.router, prefix="/api/v1")
 
 
 # --- dashboard ---------------------------------------------------------------

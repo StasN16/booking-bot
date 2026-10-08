@@ -11,10 +11,10 @@ from app.core.tenancy import current_business_id
 from app.core.models.appointment import Appointment
 from app.core.models.customer import Customer
 from app.core.schemas.api import CustomerOut, CustomerUpdate
-from app.dependencies import current_user
+from app.dependencies import clinic_scope
 
 logger = logging.getLogger(__name__)
-router = APIRouter(tags=["customers"], dependencies=[Depends(current_user)])
+router = APIRouter(tags=["customers"], dependencies=[Depends(clinic_scope)])
 
 
 def serialize(customer: Customer, appointment_count: int = 0) -> dict:

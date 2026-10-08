@@ -39,6 +39,20 @@ def normalize_phone(value: str | None) -> str | None:
 
 class LoginRequest(BaseModel):
     password: str
+    # A clinic signs in with its email. The owner leaves it out.
+    email: str | None = Field(default=None, max_length=255)
+
+
+class MeOut(BaseModel):
+    role: str
+    email: str | None = None
+    name: str | None = None
+    business_id: str | None = None
+
+
+class PasswordChange(BaseModel):
+    current_password: str
+    new_password: str = Field(max_length=200)
 
 
 class TokenResponse(BaseModel):
@@ -282,3 +296,93 @@ class StatsOut(BaseModel):
     by_treatment: dict[str, int]
     by_therapist: dict[str, int]
     by_day: list[DayStats]
+
+
+# --- clinics, for the owner of the service ----------------------------------
+
+def validate_phone_number_id(value: str | None) -> str | None:
+    """Meta's phone number id is digits. Blank clears it."""
+    if value is None:
+        return None
+    value = value.strip()
+    if not value:
+        return None
+    if not value.isdigit() or not 5 <= len(value) <= 30:
+        raise ValueError("The WhatsApp phone number ID is digits only, "
+                         "as Meta shows it under API Setup")
+    return value
+
+
+class ClinicIn(BaseModel):
+    name: str = Field(min_length=1, max_length=255)
+    phone: str = Field(min_length=5, max_length=20)
+    email: str | None = Field(default=None, max_length=255)
+    address: str | None = Field(default=None, max_length=500)
+    working_hours_start: str | None = None
+    working_hours_end: str | None = None
+    whatsapp_phone_id: str | None = Field(default=None, max_length=100)
+    # Only for a clinic whose number is under its own Meta account. Blank
+    # means the server's token, which covers numbers under the owner's.
+    whatsapp_token: str | None = Field(default=None, max_length=500)
+
+    _start = field_validator("working_hours_start")(validate_hhmm)
+    _end = field_validator("working_hours_end")(validate_hhmm)
+    _phone_id = field_validator("whatsapp_phone_id")(validate_phone_number_id)
+
+
+class ClinicUpdate(BaseModel):
+    name: str | None = Field(default=None, min_length=1, max_length=255)
+    phone: str | None = Field(default=None, min_length=5, max_length=20)
+    email: str | None = Field(default=None, max_length=255)
+    address: str | None = Field(default=None, max_length=500)
+    working_hours_start: str | None = None
+    working_hours_end: str | None = None
+    whatsapp_phone_id: str | None = Field(default=None, max_length=100)
+    whatsapp_token: str | None = Field(default=None, max_length=500)
+    is_active: bool | None = None
+
+    _start = field_validator("working_hours_start")(validate_hhmm)
+    _end = field_validator("working_hours_end")(validate_hhmm)
+    _phone_id = field_validator("whatsapp_phone_id")(validate_phone_number_id)
+
+
+class ClinicOut(BaseModel):
+    # The token itself is never sent back, only whether the clinic has one.
+    id: str
+    name: str
+    phone: str
+    email: str | None = None
+    address: str | None = None
+    working_hours_start: str | None = None
+    working_hours_end: str | None = None
+    whatsapp_phone_id: str | None = None
+    has_own_token: bool = False
+    is_active: bool
+    is_home: bool = False
+    logins: int = 0
+    upcoming_appointments: int = 0
+
+
+class ClinicLoginIn(BaseModel):
+    email: str = Field(min_length=3, max_length=255)
+    name: str | None = Field(default=None, max_length=255)
+
+
+class ClinicLoginUpdate(BaseModel):
+    name: str | None = Field(default=None, max_length=255)
+    is_active: bool | None = None
+
+
+class ClinicLoginOut(BaseModel):
+    id: str
+    business_id: str
+    email: str
+    name: str | None = None
+    is_active: bool
+    last_login_at: str | None = None
+
+
+class NewPasswordOut(BaseModel):
+    """A login and its new password, which is shown this once."""
+    login: ClinicLoginOut
+    password: str

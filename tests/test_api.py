@@ -50,7 +50,31 @@ class TestPassword:
 class TestTokens:
     def test_a_token_round_trips(self, configured):
         token = issue_token()["access_token"]
-        assert current_user(token) == "owner"
+        assert current_user(token).role == "owner"
+
+    def test_a_clinic_token_says_which_clinic(self, configured):
+        token = issue_token(subject="user:u-1", role="clinic", business_id="clinic-b")["access_token"]
+        who = current_user(token)
+        assert (who.role, who.user_id, who.business_id) == ("clinic", "u-1", "clinic-b")
+        assert not who.is_owner
+
+    def test_an_owner_token_from_before_clinic_logins_still_works(self, configured):
+        old = jwt.encode({"sub": "owner", "exp": clinic_now() + timedelta(hours=1)},
+                         settings.JWT_SECRET, algorithm=ALGORITHM)
+        assert current_user(old).is_owner
+
+    def test_a_clinic_token_without_its_clinic_is_rejected(self, configured):
+        token = jwt.encode({"sub": "user:u-1", "role": "clinic", "exp": clinic_now() + timedelta(hours=1)},
+                           settings.JWT_SECRET, algorithm=ALGORITHM)
+        with pytest.raises(HTTPException) as raised:
+            current_user(token)
+        assert raised.value.status_code == 401
+
+    def test_a_clinic_cannot_claim_to_be_the_owner(self, configured):
+        token = jwt.encode({"sub": "user:u-1", "role": "owner", "exp": clinic_now() + timedelta(hours=1)},
+                           settings.JWT_SECRET, algorithm=ALGORITHM)
+        with pytest.raises(HTTPException):
+            current_user(token)
 
     def test_the_response_says_when_it_expires(self, configured):
         assert issue_token()["expires_at"]
@@ -204,15 +228,24 @@ class TestEveryManagementRouterIsProtected:
         Auth is declared on the router, not per endpoint, so a new endpoint
         cannot be added without it. This checks that stays true.
         """
-        from app.api.v1 import (appointments, business, customers,
+        from app.api.v1 import (appointments, business, customers, platform,
                                 therapists, treatments)
 
+        def names(module):
+            return [getattr(d.dependency, "__name__", "") for d in module.router.dependencies]
+
+        # Clinic data: a valid token, and the request held to one clinic.
         for module in (appointments, business, customers, therapists, treatments):
-            names = [
-                getattr(d.dependency, "__name__", "")
-                for d in module.router.dependencies
-            ]
-            assert "current_user" in names, f"{module.__name__} is unprotected"
+            assert "clinic_scope" in names(module), f"{module.__name__} is not held to a clinic"
+        # The owner's pages: the owner and nobody else.
+        assert "require_owner" in names(platform)
+
+    def test_both_checks_start_from_a_valid_token(self):
+        import inspect
+        from app.dependencies import clinic_scope, current_user, require_owner
+        for check in (clinic_scope, require_owner):
+            defaults = [p.default for p in inspect.signature(check).parameters.values()]
+            assert any(getattr(d, "dependency", None) is current_user for d in defaults), check.__name__
 
 
 class TestPhoneNormalization:
@@ -420,3 +453,153 @@ class TestAuthStatus:
         monkeypatch.setattr(settings, "ADMIN_PASSWORD", "hunter2")
         body = client.get("/api/v1/auth/status").text
         assert "hunter2" not in body and list(client.get("/api/v1/auth/status").json()) == ["configured"]
+
+
+class TestWhichClinicARequestSees:
+    """
+    The rule that keeps clinics apart: a clinic login sees its own clinic
+    and nothing else; the owner chooses.
+    """
+
+    @pytest.fixture
+    def known(self, monkeypatch):
+        from app.core import tenancy
+        from app.services import accounts
+
+        async def business_exists(business_id):
+            return business_id in ("home", "clinic-b")
+
+        problems = {}
+
+        async def login_problem(user_id, business_id):
+            return problems.get(user_id)
+
+        monkeypatch.setattr(settings, "BUSINESS_ID", "home")
+        monkeypatch.setattr(accounts, "business_exists", business_exists)
+        monkeypatch.setattr(accounts, "login_problem", login_problem)
+        tenancy._current.set(None)
+        return problems
+
+    async def scope(self, who, header=None):
+        from contextlib import asynccontextmanager
+        from app.core import tenancy
+        from app.dependencies import clinic_scope
+        before = tenancy.current_business_id()
+        async with asynccontextmanager(clinic_scope)(principal=who, x_business_id=header) as chosen:
+            assert tenancy.current_business_id() == chosen
+        # Let go afterwards: the next request must not start in this clinic.
+        assert tenancy.current_business_id() == before
+        return chosen
+
+    async def test_the_owner_gets_the_home_clinic_by_default(self, known):
+        from app.dependencies import Principal
+        assert await self.scope(Principal("owner")) == "home"
+
+    async def test_the_owner_can_choose_any_clinic(self, known):
+        from app.dependencies import Principal
+        assert await self.scope(Principal("owner"), "clinic-b") == "clinic-b"
+
+    async def test_the_owner_cannot_choose_a_clinic_that_does_not_exist(self, known):
+        from app.dependencies import Principal
+        with pytest.raises(HTTPException) as raised:
+            await self.scope(Principal("owner"), "nowhere")
+        assert raised.value.status_code == 404
+
+    async def test_a_clinic_login_gets_its_own_clinic(self, known):
+        from app.dependencies import Principal
+        who = Principal("clinic", user_id="u-1", business_id="clinic-b")
+        assert await self.scope(who) == "clinic-b"
+        assert await self.scope(who, "clinic-b") == "clinic-b"
+
+    async def test_a_clinic_login_cannot_ask_for_another_clinic(self, known):
+        from app.dependencies import Principal
+        who = Principal("clinic", user_id="u-1", business_id="clinic-b")
+        with pytest.raises(HTTPException) as raised:
+            await self.scope(who, "home")
+        assert raised.value.status_code == 403
+
+    async def test_a_login_switched_off_is_refused_at_once(self, known):
+        from app.dependencies import Principal
+        known["u-1"] = "This login has been turned off"
+        with pytest.raises(HTTPException) as raised:
+            await self.scope(Principal("clinic", user_id="u-1", business_id="clinic-b"))
+        assert raised.value.status_code == 401
+
+
+class TestOwnerOnly:
+    def test_a_clinic_login_cannot_reach_the_owners_pages(self):
+        from app.dependencies import Principal, require_owner
+        with pytest.raises(HTTPException) as raised:
+            require_owner(Principal("clinic", user_id="u-1", business_id="clinic-b"))
+        assert raised.value.status_code == 403
+
+    def test_the_owner_can(self):
+        from app.dependencies import Principal, require_owner
+        assert require_owner(Principal("owner")).is_owner
+
+    def test_the_route_refuses_a_clinic_token(self, configured):
+        from fastapi.testclient import TestClient
+        from app.main import app
+        token = issue_token(subject="user:u-1", role="clinic", business_id="clinic-b")["access_token"]
+        response = TestClient(app).get("/api/v1/platform/clinics",
+                                       headers={"Authorization": f"Bearer {token}"})
+        assert response.status_code == 403
+
+
+class TestClinicSignIn:
+    @pytest.fixture
+    def client(self, configured, monkeypatch):
+        from types import SimpleNamespace
+        from fastapi.testclient import TestClient
+        from app.api.v1 import auth
+        from app.main import app
+        from app.services import accounts
+
+        auth.reset()
+
+        async def authenticate(email, password):
+            if email == "dana@clinic.co.il" and password == "right-password":
+                return SimpleNamespace(id="u-1", business_id="clinic-b")
+            return None
+
+        monkeypatch.setattr(accounts, "authenticate", authenticate)
+        yield TestClient(app)
+        auth.reset()
+
+    def test_a_clinic_signs_in_with_email_and_gets_its_clinic(self, client):
+        response = client.post("/api/v1/auth/login",
+                               json={"email": "dana@clinic.co.il", "password": "right-password"})
+        assert response.status_code == 200
+        who = current_user(response.json()["access_token"])
+        assert (who.role, who.user_id, who.business_id) == ("clinic", "u-1", "clinic-b")
+
+    def test_a_wrong_password_is_refused_without_saying_which_part(self, client):
+        response = client.post("/api/v1/auth/login",
+                               json={"email": "dana@clinic.co.il", "password": "wrong"})
+        assert response.status_code == 401
+        assert response.json()["detail"] == "Incorrect email or password"
+
+    def test_wrong_clinic_passwords_count_towards_the_limit(self, client):
+        from app.api.v1 import auth
+        for _ in range(auth.MAX_FAILURES):
+            client.post("/api/v1/auth/login", json={"email": "x@y.co", "password": "wrong"})
+        response = client.post("/api/v1/auth/login",
+                               json={"email": "dana@clinic.co.il", "password": "right-password"})
+        assert response.status_code == 429
+
+    def test_without_an_email_it_is_the_owners_password(self, client):
+        response = client.post("/api/v1/auth/login", json={"password": "correct-horse"})
+        assert response.status_code == 200
+        assert current_user(response.json()["access_token"]).is_owner
+
+    def test_the_owner_is_told_who_they_are(self, client):
+        token = client.post("/api/v1/auth/login", json={"password": "correct-horse"}).json()["access_token"]
+        response = client.get("/api/v1/auth/me", headers={"Authorization": f"Bearer {token}"})
+        assert response.json()["role"] == "owner"
+
+    def test_the_owner_password_cannot_be_changed_through_the_api(self, client):
+        token = client.post("/api/v1/auth/login", json={"password": "correct-horse"}).json()["access_token"]
+        response = client.post("/api/v1/auth/password",
+                               json={"current_password": "correct-horse", "new_password": "something-new"},
+                               headers={"Authorization": f"Bearer {token}"})
+        assert response.status_code == 400

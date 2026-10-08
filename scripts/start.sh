@@ -61,6 +61,12 @@ if command -v brew >/dev/null 2>&1; then
   fi
 fi
 
+# Bring the database up to date with the code, so a newly pulled version
+# never starts against tables it expects and the database does not have yet.
+if ! poetry run alembic upgrade head > "$LOGS/migrate.log" 2>&1; then
+  die "Could not update the database. Details are in logs/migrate.log"
+fi
+
 # --- port ----------------------------------------------------------------------
 
 if lsof -nP -iTCP:"$PORT" -sTCP:LISTEN >/dev/null 2>&1; then

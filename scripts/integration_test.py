@@ -207,6 +207,7 @@ async def main():
     await check_session_persistence()
     await check_audit_trail(treatment)
     await check_dashboard_api(treatment)
+    await check_two_clinics()
     return summarize()
 
 
@@ -581,6 +582,168 @@ async def check_dashboard_api(treatment):
 
     finally:
         await cleanup([booked_id])
+
+
+async def check_two_clinics():
+    """
+    A second clinic on the same server, driven through the real app as the
+    dashboard and WhatsApp would: its own login, team, treatments,
+    appointments and number, and none of the first clinic's.
+    """
+    print()
+    print("=" * 70)
+    print("TWO CLINICS ON ONE SERVER")
+    print("=" * 70)
+
+    import uuid
+    import httpx
+    from app.core import tenancy
+    from app.core.models.appointment import Appointment
+    from app.core.models.customer import Customer
+    from app.core.timeutils import now as clinic_now
+    from app.dependencies import issue_token
+    from app.main import app
+    from app.services import reminders
+
+    if not settings.JWT_SECRET:
+        check("two clinics: JWT_SECRET is set, to sign in", False, "run scripts/configure.py")
+        return
+
+    owner = {"Authorization": f"Bearer {issue_token()['access_token']}"}
+    # A WhatsApp number id no real clinic has.
+    number = "99" + str(uuid.uuid4().int)[:12]
+    second = None
+
+    try:
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app),
+                                     base_url="http://test") as client:
+            r = await client.post("/api/v1/platform/clinics", headers=owner, json={
+                "name": "Integration Test Clinic", "phone": "0500000000",
+                "whatsapp_phone_id": number,
+                "working_hours_start": "08:00", "working_hours_end": "22:00"})
+            check("the owner can add a clinic", r.status_code == 201, r.text[:150])
+            if r.status_code != 201:
+                return
+            second = r.json()["id"]
+            as_second = {**owner, "X-Business-Id": second}
+
+            r = await client.post("/api/v1/platform/clinics", headers=owner, json={
+                "name": "Same Number Clinic", "phone": "0500000001", "whatsapp_phone_id": number})
+            check("no two clinics can share a WhatsApp number", r.status_code == 409, str(r.status_code))
+
+            everyday = "Sunday,Monday,Tuesday,Wednesday,Thursday,Friday,Saturday"
+            r = await client.post("/api/v1/therapists", headers=as_second, json={
+                "name": "Test Therapist B", "working_days": everyday,
+                "working_hours_start": "08:00", "working_hours_end": "22:00"})
+            check("the owner can give it a team", r.status_code == 201, r.text[:150])
+            r = await client.post("/api/v1/treatments", headers=as_second, json={
+                "name": "Test Treatment B", "duration_minutes": 30, "price": 100})
+            check("and treatments", r.status_code == 201, r.text[:150])
+            treatment_b = r.json()
+
+            email = f"integration-{second[:8]}@example.com"
+            r = await client.post(f"/api/v1/platform/clinics/{second}/logins", headers=owner,
+                                  json={"email": email, "name": "Integration"})
+            check("and a login, its password shown once",
+                  r.status_code == 201 and len(r.json().get("password", "")) >= 12, str(r.status_code))
+            login_id, password = r.json()["login"]["id"], r.json()["password"]
+
+            r = await client.post("/api/v1/auth/login", json={"email": email.upper(), "password": password})
+            # The status only: the body holds a live token, which has no place in a log.
+            check("the clinic signs in with its email, however it is typed", r.status_code == 200, str(r.status_code))
+            clinic = {"Authorization": f"Bearer {r.json()['access_token']}"}
+
+            me = (await client.get("/api/v1/auth/me", headers=clinic)).json()
+            check("it is told which clinic it is", me.get("business_id") == second, str(me))
+
+            team = [t["name"] for t in (await client.get("/api/v1/therapists", headers=clinic)).json()]
+            check("a clinic sees only its own team", team == ["Test Therapist B"], str(team))
+            offered = [t["name"] for t in (await client.get("/api/v1/treatments", headers=clinic)).json()]
+            check("and only its own treatments", offered == ["Test Treatment B"], str(offered))
+
+            day = (clinic_now().date() + timedelta(days=2)).isoformat()
+            free = (await client.get("/api/v1/availability", headers=clinic,
+                                     params={"treatment_id": treatment_b["id"], "date": day})).json()
+            check("its free times come from its own team",
+                  bool(free.get("slots")) and {s["therapist_name"] for s in free["slots"]} == {"Test Therapist B"},
+                  f"{len(free.get('slots', []))} slots")
+            slot = free["slots"][0]
+            r = await client.post("/api/v1/appointments", headers=clinic, json={
+                "customer_phone": TEST_PHONE, "treatment_name": "Test Treatment B",
+                "therapist_name": slot["therapist_name"], "date": day, "time": slot["time"]})
+            check("it books its own appointments", r.status_code == 201, r.text[:150])
+            booked = r.json()["id"]
+
+            home = (await client.get("/api/v1/appointments", headers=owner,
+                                     params={"from_date": day, "to_date": day})).json()
+            check("the first clinic does not see them", all(a["id"] != booked for a in home))
+            r = await client.get(f"/api/v1/appointments/{booked}", headers=owner)
+            check("nor open one by its id", r.status_code == 404, str(r.status_code))
+
+            r = await client.get("/api/v1/appointments", headers={**clinic, "X-Business-Id": settings.BUSINESS_ID})
+            check("a clinic login cannot ask for another clinic", r.status_code == 403, str(r.status_code))
+            r = await client.get("/api/v1/platform/clinics", headers=clinic)
+            check("nor reach the owner's pages", r.status_code == 403, str(r.status_code))
+
+            found = await tenancy.business_for_phone_number(number)
+            check("a WhatsApp message to its number finds it", found == second, str(found))
+            with tenancy.acting_for(second):
+                bot_offers = [t["name"] for t in await availability.get_treatments()]
+            check("and the bot there offers its treatments only", bot_offers == ["Test Treatment B"], str(bot_offers))
+
+            # Reminders go out from the clinic's own number. Run as if it were
+            # twenty years on, so nothing real is in the window.
+            sent = []
+
+            async def fake_send(phone, text):
+                line = tenancy.channel()
+                sent.append((phone, line.phone_id if line else None))
+                return True
+
+            real_send = reminders.send_message
+            reminders.send_message = fake_send
+            try:
+                later = clinic_now() + timedelta(days=7305)
+                async with booking.async_session() as s:
+                    customer = (await s.execute(select(Customer).where(
+                        Customer.phone == TEST_PHONE, Customer.business_id == uuid.UUID(second)))).scalar_one()
+                    s.add(Appointment(
+                        id=uuid.uuid4(), business_id=uuid.UUID(second), customer_id=customer.id,
+                        therapist_id=uuid.UUID(slot["therapist_id"]), treatment_id=uuid.UUID(treatment_b["id"]),
+                        start_time=later + timedelta(hours=23), end_time=later + timedelta(hours=23, minutes=30),
+                        status="confirmed", reminder_24h_sent=False, reminder_1h_sent=False))
+                    await s.commit()
+                await reminders.send_due_reminders(now=later)
+            finally:
+                reminders.send_message = real_send
+            check("its reminders go out from its own number", sent == [(TEST_PHONE, number)], str(sent))
+
+            await client.put(f"/api/v1/platform/logins/{login_id}", headers=owner, json={"is_active": False})
+            r = await client.get("/api/v1/therapists", headers=clinic)
+            check("a login switched off is locked out at once", r.status_code == 401, str(r.status_code))
+
+    finally:
+        if second:
+            await remove_clinic(second)
+        await tenancy.refresh_channels()
+
+
+async def remove_clinic(business_id):
+    """Delete a test clinic and everything in it."""
+    import uuid
+    from sqlalchemy import delete
+    from app.core.models.appointment import Appointment
+    from app.core.models.customer import Customer
+    from app.core.models.therapist import Therapist
+    from app.core.models.treatment import Treatment
+    from app.core.models.user import User
+
+    key = uuid.UUID(business_id)
+    async with booking.async_session() as s:
+        for model in (Appointment, Customer, User, Therapist, Treatment):
+            await s.execute(delete(model).where(model.business_id == key))
+        await s.execute(delete(Business).where(Business.id == key))
+        await s.commit()
 
 
 async def cleanup(appointment_ids):

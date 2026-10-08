@@ -16,7 +16,8 @@ class Therapist(TimeStampedModel):
     phone: Mapped[str] = mapped_column(String(20), nullable=True)
     email: Mapped[str] = mapped_column(String(255), nullable=True)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
-    working_days: Mapped[str] = mapped_column(String(50), nullable=True)
+    # All seven English day names, comma-separated, are 56 characters.
+    working_days: Mapped[str] = mapped_column(String(100), nullable=True)
     working_hours_start: Mapped[str] = mapped_column(String(10), nullable=True)
     working_hours_end: Mapped[str] = mapped_column(String(10), nullable=True)
     

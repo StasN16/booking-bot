@@ -30,7 +30,7 @@ from app.core.schemas.api import (
     normalize_phone,
 )
 from app.core.timeutils import now as clinic_now, to_clinic_tz
-from app.dependencies import current_user
+from app.dependencies import clinic_scope
 from app.services.booking import (
     cancel_appointment,
     create_appointment,
@@ -40,7 +40,7 @@ from app.services.availability import get_available_slots
 from app.services.date_parser import parse_date
 
 logger = logging.getLogger(__name__)
-router = APIRouter(tags=["appointments"], dependencies=[Depends(current_user)])
+router = APIRouter(tags=["appointments"], dependencies=[Depends(clinic_scope)])
 
 
 # Booking services answer with codes; the API answers with status numbers.

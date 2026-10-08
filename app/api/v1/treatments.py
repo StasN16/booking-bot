@@ -11,10 +11,10 @@ from app.core.models.appointment import Appointment
 from app.core.models.treatment import Treatment
 from app.core.schemas.api import TreatmentIn, TreatmentOut, TreatmentUpdate
 from app.core.timeutils import now as clinic_now
-from app.dependencies import current_user
+from app.dependencies import clinic_scope
 
 logger = logging.getLogger(__name__)
-router = APIRouter(tags=["treatments"], dependencies=[Depends(current_user)])
+router = APIRouter(tags=["treatments"], dependencies=[Depends(clinic_scope)])
 
 
 def serialize(treatment: Treatment) -> dict:
