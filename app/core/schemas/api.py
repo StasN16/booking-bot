@@ -231,6 +231,7 @@ class BusinessOut(BaseModel):
     address: str | None = None
     working_hours_start: str | None = None
     working_hours_end: str | None = None
+    timezone: str
 
 
 class BusinessUpdate(BaseModel):

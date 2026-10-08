@@ -396,3 +396,27 @@ class TestDashboardServing:
     def test_api_responses_do_not_get_dashboard_headers(self, client):
         response = client.get("/health")
         assert "content-security-policy" not in response.headers
+
+
+class TestAuthStatus:
+    @pytest.fixture
+    def client(self):
+        from fastapi.testclient import TestClient
+        from app.main import app
+        return TestClient(app)
+
+    def test_reports_configured(self, client, monkeypatch):
+        monkeypatch.setattr(settings, "JWT_SECRET", "s")
+        monkeypatch.setattr(settings, "ADMIN_PASSWORD", "p")
+        assert client.get("/api/v1/auth/status").json() == {"configured": True}
+
+    @pytest.mark.parametrize("secret,password", [("", "p"), ("s", ""), ("", "")])
+    def test_reports_missing_configuration(self, client, monkeypatch, secret, password):
+        monkeypatch.setattr(settings, "JWT_SECRET", secret)
+        monkeypatch.setattr(settings, "ADMIN_PASSWORD", password)
+        assert client.get("/api/v1/auth/status").json() == {"configured": False}
+
+    def test_reveals_nothing_else(self, client, monkeypatch):
+        monkeypatch.setattr(settings, "ADMIN_PASSWORD", "hunter2")
+        body = client.get("/api/v1/auth/status").text
+        assert "hunter2" not in body and list(client.get("/api/v1/auth/status").json()) == ["configured"]

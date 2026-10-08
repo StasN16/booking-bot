@@ -5,6 +5,7 @@ from collections import deque
 
 from fastapi import APIRouter, HTTPException, Request
 
+from app.config import settings
 from app.core.schemas.api import LoginRequest, TokenResponse
 from app.dependencies import check_password, issue_token
 
@@ -48,6 +49,17 @@ def record_failure(key: str):
 def reset():
     """Forget every recorded failure. For tests."""
     _failures.clear()
+
+
+@router.get("/auth/status")
+async def status():
+    """
+    Whether sign-in has been set up, for the login page to explain itself.
+
+    Without it, a dashboard with no ADMIN_PASSWORD or JWT_SECRET could only
+    answer "wrong password", forever. Says nothing beyond yes or no.
+    """
+    return {"configured": bool(settings.ADMIN_PASSWORD and settings.JWT_SECRET)}
 
 
 @router.post("/auth/login", response_model=TokenResponse)

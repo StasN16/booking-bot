@@ -24,6 +24,8 @@ def serialize(business: Business) -> dict:
         "address": business.address,
         "working_hours_start": business.working_hours_start,
         "working_hours_end": business.working_hours_end,
+        # Dates on the dashboard are the clinic's, wherever it is opened from.
+        "timezone": settings.TIMEZONE,
     }
 
 
