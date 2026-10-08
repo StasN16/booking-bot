@@ -173,8 +173,10 @@ async def main():
         check("booked time round-trips unchanged", slot["time"] in listed_times,
               f"booked {slot['time']}, listing shows {listed_times}")
 
-        # Reschedule to a later free slot.
-        later = [s for s in after if s["therapist_id"] == slot["therapist_id"]]
+        # Reschedule to a later free slot, as free now: the bookings above
+        # took some times since `after` was read.
+        now_free = await availability.get_available_slots(treatment["id"], target)
+        later = [s for s in now_free if s["therapist_id"] == slot["therapist_id"]]
         if later:
             new_slot = later[-1]
             resc = await booking.reschedule_appointment(
@@ -187,6 +189,7 @@ async def main():
                   f"{slot['time']} -> {new_slot['time']} : {resc}")
 
         # Cancel.
+        before_cancel = await availability.get_available_slots(treatment["id"], target)
         canc = await booking.cancel_appointment(TEST_PHONE, appointment_id=appt_id)
         check("cancel_appointment() succeeds", canc.get("success"), str(canc))
 
@@ -197,8 +200,8 @@ async def main():
 
         # Cancelled slot frees up again.
         freed = await availability.get_available_slots(treatment["id"], target)
-        check("cancelling frees the slot", len(freed) > len(after),
-              f"{len(after)} -> {len(freed)} slots")
+        check("cancelling frees the slot", len(freed) > len(before_cancel),
+              f"{len(before_cancel)} -> {len(freed)} slots")
 
         # Cleanup
         await cleanup([appt_id, amb_id, dup.get("appointment_id")])
@@ -731,6 +734,50 @@ async def check_two_clinics():
             finally:
                 reminders.send_message = real_send
             check("its reminders go out from its own number", sent == [(TEST_PHONE, number)], str(sent))
+
+            # Who does which treatment. Therapist B has nothing ticked: everything.
+            r = await client.post("/api/v1/treatments", headers=clinic, json={
+                "name": "Test Treatment C", "duration_minutes": 30, "price": 120})
+            treatment_c = r.json()
+            r = await client.post("/api/v1/therapists", headers=clinic, json={
+                "name": "Test Therapist C", "working_days": everyday,
+                "working_hours_start": "08:00", "working_hours_end": "22:00",
+                "treatment_ids": [treatment_c["id"]]})
+            check("a team member can do only some treatments",
+                  r.status_code == 201 and r.json().get("treatment_ids") == [treatment_c["id"]], r.text[:150])
+            therapist_c = r.json()
+
+            async def offered(treatment_id):
+                answer = (await client.get("/api/v1/availability", headers=clinic,
+                                           params={"treatment_id": treatment_id, "date": day})).json()
+                return {slot["therapist_name"] for slot in answer.get("slots", [])}
+            for_b, for_c = await offered(treatment_b["id"]), await offered(treatment_c["id"])
+            check("free times offer only who does the treatment",
+                  for_b == {"Test Therapist B"} and for_c == {"Test Therapist B", "Test Therapist C"},
+                  f"B: {sorted(for_b)}, C: {sorted(for_c)}")
+
+            r = await client.post("/api/v1/appointments", headers=clinic, json={
+                "customer_phone": TEST_PHONE, "treatment_name": "Test Treatment B",
+                "therapist_name": "Test Therapist C", "date": day, "time": "21:00"})
+            check("booking someone for a treatment they don't do is refused", r.status_code == 400, r.text[:150])
+
+            with tenancy.acting_for(second):
+                summary = await availability.get_therapists_summary()
+            line_b = next((line for line in summary.splitlines() if "Test Therapist B" in line), "")
+            line_c = next((line for line in summary.splitlines() if "Test Therapist C" in line), "")
+            check("the bot is told who does what",
+                  "כל הטיפולים" in line_b and "Test Treatment C" in line_c and "Test Treatment B" not in line_c,
+                  summary.replace("\n", " | ")[:200])
+
+            home_treatments = (await client.get("/api/v1/treatments", headers=owner)).json()
+            foreign = home_treatments[0]["id"] if home_treatments else str(uuid.uuid4())
+            r = await client.put(f"/api/v1/therapists/{therapist_c['id']}", headers=clinic,
+                                 json={"treatment_ids": [foreign]})
+            check("another clinic's treatment cannot be ticked", r.status_code == 400, str(r.status_code))
+            r = await client.put(f"/api/v1/therapists/{therapist_c['id']}", headers=clinic,
+                                 json={"treatment_ids": []})
+            check("nothing ticked means every treatment again",
+                  r.status_code == 200 and r.json().get("treatment_ids") == [], r.text[:150])
 
             await client.put(f"/api/v1/platform/logins/{login_id}", headers=owner, json={"is_active": False})
             r = await client.get("/api/v1/therapists", headers=clinic)

@@ -50,6 +50,7 @@ ERROR_STATUS = {
     "bad_datetime": 400,
     "treatment_not_found": 404,
     "no_therapist_available": 409,
+    "therapist_cannot_do": 400,
     "customer_not_found": 404,
     "no_appointment": 404,
 }
@@ -59,7 +60,8 @@ ERROR_DETAIL = {
     "in_the_past": "That time has already passed",
     "bad_datetime": "Could not read the date or time",
     "treatment_not_found": "No such treatment",
-    "no_therapist_available": "No active therapist to assign",
+    "no_therapist_available": "No active therapist does this treatment",
+    "therapist_cannot_do": "That therapist does not do this treatment",
     "customer_not_found": "No such customer",
     "no_appointment": "No matching appointment",
 }

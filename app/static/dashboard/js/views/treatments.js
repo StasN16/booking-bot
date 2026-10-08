@@ -1,11 +1,12 @@
 /**
  * The treatments the clinic offers, with their length and price. The bot
- * offers customers exactly the active ones listed here.
+ * offers customers exactly the active ones listed here, each with the
+ * people on the team who do it (set on the Team page).
  */
 import { api } from '../api.js';
 import { fmt, t } from '../i18n.js';
 import { badge, busy, confirmDialog, empty, field, fill, h, icon, modal, toast, uid } from '../ui.js';
-import { sameName } from '../util.js';
+import { doesTreatment, sameName } from '../util.js';
 
 export default function treatmentsView(container, params, ctx) {
   let showInactive = params.inactive === '1';
@@ -57,11 +58,24 @@ export default function treatmentsView(container, params, ctx) {
         h('span', { class: 'figure' }, fmt.money(treatment.price)),
         h('span', { class: 'meta-row muted' }, icon('clock'), t('common.minutes', { n: treatment.duration_minutes }))),
       treatment.description ? h('p', { class: 'card-text' }, treatment.description) : null,
+      treatment.is_active ? whoDoes(treatment) : null,
       h('div', { class: 'card-actions' },
         h('button', { class: 'btn btn-small', type: 'button', onclick: () => edit(treatment) }, icon('edit'), h('span', {}, t('common.edit'))),
         treatment.is_active
           ? h('button', { class: 'btn btn-small btn-danger-ghost', type: 'button', onclick: () => deactivate(treatment) }, t('treat.deactivate'))
           : h('button', { class: 'btn btn-small', type: 'button', onclick: () => reactivate(treatment) }, t('common.reactivate'))));
+  }
+
+  /** Who on the team does it; a warning when nobody does, as it cannot be booked. */
+  function whoDoes(treatment) {
+    const team = ctx.activeTherapists();
+    if (!team.length) return null;
+    const doing = team.filter((th) => doesTreatment(th, treatment.id));
+    if (!doing.length) {
+      return h('p', { class: 'meta-row warning-text' }, icon('alert'), h('span', {}, t('treat.nobody')));
+    }
+    const who = doing.length === team.length ? t('treat.everyone') : doing.map((th) => th.name).join(', ');
+    return h('p', { class: 'meta-row muted' }, icon('team'), h('span', {}, t('treat.doneBy', { who })));
   }
 
   function edit(treatment) {

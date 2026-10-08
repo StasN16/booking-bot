@@ -7,7 +7,7 @@ import { api } from '../api.js';
 import * as D from '../dates.js';
 import { fmt, t } from '../i18n.js';
 import { busy, empty, errorBox, field, fill, h, ltr, modal, notice, spinner, toast, uid } from '../ui.js';
-import { debounce, groupBy, normalizePhone } from '../util.js';
+import { debounce, doesTreatment, groupBy, normalizePhone } from '../util.js';
 
 /**
  * prefill: { date, time, therapistId, phone, name } - all optional. A time
@@ -47,10 +47,12 @@ export function openBooking(ctx, prefill = {}) {
   const treatment = h('select', {}, treatments.map((tr) => h('option', { value: tr.id },
     `${tr.name} · ${t('common.minutes', { n: tr.duration_minutes })} · ${fmt.money(tr.price)}`)));
   const date = h('input', { type: 'date', min: today, required: true, value: prefill.date && prefill.date >= today ? prefill.date : today });
-  const therapist = h('select', {},
-    h('option', { value: '' }, t('book.anyone')),
-    therapists.map((th) => h('option', { value: th.id }, th.name)));
-  if (prefill.therapistId && therapists.some((th) => th.id === prefill.therapistId)) therapist.value = prefill.therapistId;
+  // A time clicked in someone's column: start with a treatment they do.
+  const clickedOn = therapists.find((th) => th.id === prefill.therapistId);
+  const theirs = clickedOn && treatments.find((tr) => doesTreatment(clickedOn, tr.id));
+  if (theirs) treatment.value = theirs.id;
+  const therapist = h('select', {});
+  listTherapists(clickedOn ? clickedOn.id : '');
   const slotsBox = h('div', { class: 'slots-box', 'aria-live': 'polite' });
   const notes = h('textarea', { rows: 2, maxlength: 1000, placeholder: t('appt.notesPlaceholder') });
   const summary = h('p', { class: 'summary' });
@@ -83,12 +85,23 @@ export function openBooking(ctx, prefill = {}) {
       phoneHint.classList.add('is-error');
     }
   });
-  treatment.addEventListener('change', loadSlots);
+  treatment.addEventListener('change', () => {
+    listTherapists(therapist.value);
+    loadSlots();
+  });
   date.addEventListener('change', loadSlots);
   therapist.addEventListener('change', loadSlots);
 
   loadSlots();
   if (prefill.phone) findCustomer();
+
+  /** Only those who do the chosen treatment, keeping the one picked if they still fit. */
+  function listTherapists(keep) {
+    const able = therapists.filter((th) => doesTreatment(th, treatment.value));
+    fill(therapist, h('option', { value: '' }, t('book.anyone')),
+      able.map((th) => h('option', { value: th.id }, th.name)));
+    therapist.value = able.some((th) => th.id === keep) ? keep : '';
+  }
 
   function update() {
     const ready = Boolean(chosen && normalizePhone(phone.value));

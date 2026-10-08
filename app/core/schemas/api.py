@@ -138,6 +138,8 @@ class TherapistIn(BaseModel):
     working_hours_start: str = Field(examples=["09:00"])
     working_hours_end: str = Field(examples=["18:00"])
     is_active: bool = True
+    # The treatments this person does. Empty: all of them.
+    treatment_ids: list[str] = Field(default_factory=list, max_length=500)
 
     _days = field_validator("working_days")(validate_days)
     _start = field_validator("working_hours_start")(validate_hhmm)
@@ -152,6 +154,8 @@ class TherapistUpdate(BaseModel):
     working_hours_start: str | None = None
     working_hours_end: str | None = None
     is_active: bool | None = None
+    # Left out: unchanged. Empty: all treatments.
+    treatment_ids: list[str] | None = Field(default=None, max_length=500)
 
     _days = field_validator("working_days")(validate_days)
     _start = field_validator("working_hours_start")(validate_hhmm)
@@ -168,6 +172,8 @@ class TherapistOut(BaseModel):
     working_hours_end: str | None = None
     is_active: bool
     created_at: str | None = None
+    # The treatments this person does. Empty: all of them.
+    treatment_ids: list[str] = []
 
 
 # --- appointments ----------------------------------------------------------

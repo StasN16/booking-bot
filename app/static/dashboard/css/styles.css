@@ -741,3 +741,6 @@ button.cal-head { border-top: 0; border-inline-end: 0; color: inherit; font: inh
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation-duration: 0.01ms !important; transition-duration: 0.01ms !important; }
 }
+
+/* A choice like All / Only some sits at its own width, not the row's. */
+.field > .seg { align-self: flex-start; }

@@ -53,3 +53,9 @@ export function whatsappLink(phone, text) {
 export function sameName(a, b) {
   return String(a || '').trim().toLowerCase() === String(b || '').trim().toLowerCase();
 }
+
+/** Whether a therapist does a treatment: with none ticked, they do them all. */
+export function doesTreatment(therapist, treatmentId) {
+  const ticked = therapist.treatment_ids || [];
+  return !ticked.length || ticked.includes(treatmentId);
+}

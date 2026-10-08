@@ -171,6 +171,12 @@ class TestBookingFailure:
         assert reply
         assert state == ConversationState.IDLE
 
+    @pytest.mark.parametrize("language", ["he", "en", "ru"])
+    def test_someone_who_does_not_do_the_treatment_means_choosing_again(self, language):
+        reply, state = booking_failure(language, {"error": "therapist_cannot_do"}, ConversationState.CHOOSING_TIME)
+        assert reply and reply != t(language, "booking_failed")
+        assert state == ConversationState.CHOOSING_TIME
+
 
 class TestBookingSummaryForAI:
     """

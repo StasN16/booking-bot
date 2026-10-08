@@ -78,8 +78,8 @@ line.
 | Calendar | Day (a column per therapist), week or month. Click free time to book there; click an appointment to open it. Bookings made on WhatsApp appear within a minute. |
 | Appointments | Every appointment in a range of dates, with filters by status and therapist and a search by name, phone or treatment. |
 | Customers | Everyone who has written to the bot or been booked. Each card shows the customer's history and lets you turn their reminders off. |
-| Team | Each therapist's working days and hours. Free times, in the bot and on the dashboard, come from these hours. |
-| Treatments | What the bot offers, with length and price. Retiring a treatment hides it from new bookings and keeps the history. |
+| Team | Each therapist's working days and hours, and the treatments they do: all of them, or only the ones ticked. Free times, in the bot and on the dashboard, come from these. |
+| Treatments | What the bot offers, with length and price, and who on the team does each. Retiring a treatment hides it from new bookings and keeps the history. |
 | Statistics | Appointments, revenue, cancellations, and the split by treatment and therapist, for any range up to a year. |
 | Settings | The clinic's details, its password, the dashboard language, and signing out. |
 
@@ -235,6 +235,7 @@ only ever be displayed, never run.
 | One clinic's bot does not answer | On the Clinics page, check that the clinic is on and its Phone number ID matches Meta's. The Terminal running `start.sh` names any number no clinic has. |
 | A clinic cannot sign in | Clinics → **Users**: is **Dashboard access** on? If they lost the password, press **New password**. |
 | `configure.py --check` says Meta rejected the WhatsApp token | Generate a new token for the system user in Meta Business settings and put it in `.env` as `WHATSAPP_TOKEN`. |
+| `zsh: command not found: poetry` | That Terminal window is older than the setup. Open a new one (`Cmd+N`), or first run `eval "$(/opt/homebrew/bin/brew shellenv)"`. |
 | "Port 8000 is already in use" | The bot is already running in another Terminal window. Use that one, or stop it there with `Ctrl+C`. |
 | The dashboard says sign-in is not set up | Run `./scripts/setup_mac.sh`, then start the server again. |
 | Supabase cannot be reached | Some home networks block port 5432. Use the local database, or a phone hotspot for Supabase work. |

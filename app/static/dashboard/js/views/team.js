@@ -1,6 +1,6 @@
 /**
- * The team: who works which days and hours. Availability for the bot and
- * the dashboard alike is worked out from these hours.
+ * The team: who works which days and hours, and which treatments they do.
+ * Availability for the bot and the dashboard alike is worked out from these.
  */
 import { api } from '../api.js';
 import * as D from '../dates.js';
@@ -64,6 +64,7 @@ export default function teamView(container, params, ctx) {
       h('div', { class: 'card-meta' },
         h('span', { class: 'meta-row' }, icon('clock'),
           ltr(`${therapist.working_hours_start || '—'}–${therapist.working_hours_end || '—'}`)),
+        h('span', { class: 'meta-row' }, icon('leaf'), h('span', {}, treatmentsLine(therapist))),
         therapist.phone ? h('span', { class: 'meta-row' }, icon('phone'), ltr(therapist.phone)) : null,
         therapist.email ? h('span', { class: 'meta-row' }, icon('mail'), ltr(therapist.email)) : null),
       h('div', { class: 'card-actions' },
@@ -71,6 +72,14 @@ export default function teamView(container, params, ctx) {
         therapist.is_active
           ? h('button', { class: 'btn btn-small btn-danger-ghost', type: 'button', onclick: () => deactivate(therapist) }, t('team.deactivate'))
           : h('button', { class: 'btn btn-small', type: 'button', onclick: () => reactivate(therapist) }, t('common.reactivate'))));
+  }
+
+  /** The treatments someone does, for their card. */
+  function treatmentsLine(therapist) {
+    const ticked = therapist.treatment_ids || [];
+    if (!ticked.length) return t('team.allTreatments');
+    const names = ctx.activeTreatments().filter((tr) => ticked.includes(tr.id)).map((tr) => tr.name);
+    return names.length ? names.join(', ') : t('team.noneNow');
   }
 
   function edit(therapist) {
@@ -85,6 +94,33 @@ export default function teamView(container, params, ctx) {
     });
     const start = timeSelect(therapist ? therapist.working_hours_start || '09:00' : '09:00', { required: true });
     const end = timeSelect(therapist ? therapist.working_hours_end || '18:00' : '18:00', { required: true });
+
+    // Everyone starts doing every treatment; ticking some narrows it to those.
+    const offered = ctx.activeTreatments();
+    const ticked = new Set(therapist ? therapist.treatment_ids || [] : []);
+    let onlySome = ticked.size > 0;
+    const treatmentBoxes = offered.map((treatment) => {
+      const input = h('input', { type: 'checkbox', value: treatment.id, checked: ticked.has(treatment.id) });
+      return { id: treatment.id, input, el: h('label', { class: 'day-toggle' }, input, h('span', {}, treatment.name)) };
+    });
+    const picker = h('div', { class: 'day-picker' }, treatmentBoxes.map((box) => box.el));
+    const allButton = h('button', { type: 'button', class: 'seg-btn', onclick: () => choose(false) }, t('team.allTreatments'));
+    const someButton = h('button', { type: 'button', class: 'seg-btn', onclick: () => choose(true) }, t('team.someTreatments'));
+    function choose(some) {
+      onlySome = some;
+      allButton.setAttribute('aria-pressed', String(!some));
+      someButton.setAttribute('aria-pressed', String(some));
+      picker.hidden = !some;
+    }
+    choose(onlySome);
+    const treatmentsField = h('fieldset', { class: 'field span-2' },
+      h('legend', { class: 'label' }, t('team.treatments')),
+      offered.length
+        ? [h('div', { class: 'seg', role: 'group', 'aria-label': t('team.treatments') }, allButton, someButton),
+          picker,
+          h('p', { class: 'hint' }, t('team.treatmentsHint'))]
+        : h('p', { class: 'hint' }, t('team.noTreatmentsYet')));
+
     const error = h('p', { class: 'form-error', role: 'alert' });
     const formId = `team-form-${Date.now()}`;
     const submit = h('button', { class: 'btn btn-primary', type: 'submit', form: formId }, t('common.save'));
@@ -98,6 +134,7 @@ export default function teamView(container, params, ctx) {
         h('div', { class: 'day-picker' }, dayBoxes.map((box) => box.el))),
       field(t('team.start'), start),
       field(t('team.end'), end),
+      treatmentsField,
       h('div', { class: 'span-2' }, error)));
     m.foot.append(h('span', { class: 'spacer' }),
       h('button', { class: 'btn', type: 'button', onclick: () => m.close() }, t('common.cancel')),
@@ -107,12 +144,14 @@ export default function teamView(container, params, ctx) {
       event.preventDefault();
       error.textContent = '';
       const days = dayBoxes.filter((box) => box.input.checked).map((box) => box.day);
+      const chosenTreatments = treatmentBoxes.filter((box) => box.input.checked).map((box) => box.id);
       const problem = !name.value.trim() ? t('team.needName')
         : ctx.therapists.some((other) => (!therapist || other.id !== therapist.id) && sameName(other.name, name.value)) ? t('team.nameTaken')
           : !days.length ? t('team.needDay')
             : !start.value || !end.value || start.value >= end.value ? t('team.badHours')
               : email.value.trim() && !email.checkValidity() ? t('team.badEmail')
-                : '';
+                : offered.length && onlySome && !chosenTreatments.length ? t('team.pickTreatments')
+                  : '';
       if (problem) {
         error.textContent = problem;
         return;
@@ -125,6 +164,11 @@ export default function teamView(container, params, ctx) {
         working_hours_start: start.value.slice(0, 5),
         working_hours_end: end.value.slice(0, 5),
       };
+      if (offered.length) {
+        // Ticks on retired treatments are not shown, and are kept as they are.
+        const retired = [...ticked].filter((id) => !offered.some((tr) => tr.id === id));
+        body.treatment_ids = onlySome ? [...chosenTreatments, ...retired] : [];
+      }
       await busy(submit, async () => {
         try {
           await api(therapist ? `/therapists/${therapist.id}` : '/therapists', { method: therapist ? 'PUT' : 'POST', body });
