@@ -132,6 +132,9 @@ async def resolve_clinic(principal: Principal, requested: str | None) -> str:
     # Checked on every request, so turning a login or a clinic off takes
     # effect at once rather than when the token runs out.
     problem = await accounts.login_problem(principal.user_id, principal.business_id)
+    if problem == accounts.CHOOSE_PASSWORD:
+        # Still signed in, so the dashboard can ask for a password of their own.
+        raise HTTPException(status_code=403, detail=problem)
     if problem:
         raise HTTPException(status_code=401, detail=problem)
     return principal.business_id

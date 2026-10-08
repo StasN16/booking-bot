@@ -213,7 +213,8 @@ export default function clinicsView(container, params, ctx) {
       return h('div', { class: 'login-row' },
         h('div', { class: 'stack-tight' },
           h('span', { class: 'strong ellipsis' }, ltr(login.email)),
-          h('span', { class: 'muted small' }, login.name ? `${login.name} · ${seen}` : seen)),
+          h('span', { class: 'muted small' }, login.name ? `${login.name} · ${seen}` : seen),
+          login.must_change_password ? h('span', {}, badge(t('logins.waiting'), 'warning')) : null),
         h('div', { class: 'button-row' },
           access.el,
           h('button', { class: 'btn btn-small', type: 'button', onclick: () => reset(login) },
@@ -254,6 +255,7 @@ export default function clinicsView(container, params, ctx) {
       if (!yes) return;
       try {
         showPassword(await api(`/platform/logins/${login.id}/password`, { method: 'POST' }));
+        loadLogins();
       } catch (err) {
         toast(err.message, 'error');
       }
@@ -261,7 +263,7 @@ export default function clinicsView(container, params, ctx) {
   }
 }
 
-/** A new password, shown this once, to pass on to the clinic. */
+/** A password to pass on to the clinic, which replaces it at first sign-in. */
 function showPassword({ login, password }) {
   const m = modal({ title: t('password.title'), dismissable: false });
   const secret = h('code', { class: 'secret', dir: 'ltr' }, password);

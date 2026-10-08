@@ -1,8 +1,11 @@
 """
 Clinic logins: making them, checking them, and changing their passwords.
 
-A login belongs to one clinic. Passwords are generated here and shown
-once, to be passed to the clinic; afterwards only their hash exists.
+A login belongs to one clinic. The owner gives each new login a password:
+the start password from .env (CLINIC_START_PASSWORD), or a random one when
+none is set. It is shown to the owner to pass on, and afterwards only its
+hash exists. Either way it is only a start: until the user chooses their
+own password, they may do nothing else.
 """
 import logging
 import re
@@ -10,6 +13,7 @@ import uuid
 
 from sqlalchemy import func, select
 
+from app.config import settings
 from app.core.db import async_session
 from app.core.models.appointment import Appointment
 from app.core.models.business import Business
@@ -27,9 +31,17 @@ logger = logging.getLogger(__name__)
 
 EMAIL = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 
+# Signed in with a password the owner gave: only choosing one's own is open.
+CHOOSE_PASSWORD = "Choose your own password first"
+
 
 class AccountError(ValueError):
     """A request about logins that cannot be done, with the reason to show."""
+
+
+def given_password() -> str:
+    """The password the owner hands a login: the start password, if there is one."""
+    return settings.CLINIC_START_PASSWORD or generate_password()
 
 
 def normalize_email(value: str | None) -> str:
@@ -75,8 +87,12 @@ async def authenticate(email: str, password: str) -> User | None:
         return user
 
 
-async def login_problem(user_id, business_id) -> str | None:
-    """Why this login may not be used right now, or None if it may."""
+async def login_problem(user_id, business_id, *, choosing_password: bool = False) -> str | None:
+    """
+    Why this login may not be used right now, or None if it may.
+    `choosing_password` is for the requests a login still holding the
+    owner's password may make: who am I, and change my password.
+    """
     key = _uuid(user_id)
     if key is None:
         return "Invalid token"
@@ -95,6 +111,8 @@ async def login_problem(user_id, business_id) -> str | None:
         return "This login has been turned off"
     if not business.is_active:
         return "This clinic is not active"
+    if user.must_change_password and not choosing_password:
+        return CHOOSE_PASSWORD
     return None
 
 
@@ -114,14 +132,14 @@ async def list_logins(business_id) -> list[User]:
 
 
 async def create_login(business_id, email: str, name: str | None = None) -> tuple[User, str]:
-    """A new login for a clinic, and its password, which is shown only now."""
+    """A new login for a clinic, and the password to pass on to it."""
     email = normalize_email(email)
     if not EMAIL.match(email):
         raise AccountError("That does not look like an email address")
     if not await business_exists(business_id):
         raise AccountError("No such clinic")
 
-    password = generate_password()
+    password = given_password()
     async with async_session() as session:
         if (await session.execute(select(User).where(User.email == email))).first():
             raise AccountError("That email already has a login")
@@ -131,6 +149,7 @@ async def create_login(business_id, email: str, name: str | None = None) -> tupl
             email=email,
             name=(name or "").strip() or None,
             password_hash=hash_password(password),
+            must_change_password=True,
             is_active=True,
         )
         session.add(user)
@@ -141,13 +160,14 @@ async def create_login(business_id, email: str, name: str | None = None) -> tupl
 
 
 async def reset_password(user_id) -> tuple[User, str]:
-    """Give a login a new password, shown only now."""
-    password = generate_password()
+    """Give a login a new password to pass on, for when it lost its own."""
+    password = given_password()
     async with async_session() as session:
         user = await session.get(User, _uuid(user_id)) if _uuid(user_id) else None
         if not user:
             raise AccountError("No such login")
         user.password_hash = hash_password(password)
+        user.must_change_password = True
         await session.commit()
         await session.refresh(user)
     logger.info(f"Reset the password of login {user_id}")
@@ -173,13 +193,33 @@ async def change_password(user_id, current: str, new: str) -> None:
     """A clinic choosing its own password, which needs the current one."""
     if len(new or "") < MIN_LENGTH:
         raise AccountError(f"The new password needs at least {MIN_LENGTH} characters")
+    if settings.CLINIC_START_PASSWORD and new == settings.CLINIC_START_PASSWORD:
+        raise AccountError("That is the start password everyone is given. Choose one of your own")
+    if new == current:
+        raise AccountError("The new password is the same as the current one")
     async with async_session() as session:
         user = await session.get(User, _uuid(user_id)) if _uuid(user_id) else None
         if not user or not verify_password(current, user.password_hash):
             raise AccountError("The current password is not right")
         user.password_hash = hash_password(new)
+        user.must_change_password = False
         await session.commit()
     logger.info(f"Login {user_id} changed its password")
+
+
+async def give_everyone(password: str) -> list[str]:
+    """
+    Every clinic login gets this password, to be replaced at its next
+    sign-in. For a one-off start (scripts/start_password.py --everyone).
+    Returns the emails changed.
+    """
+    async with async_session() as session:
+        users = (await session.execute(select(User).order_by(User.email))).scalars().all()
+        for user in users:
+            user.password_hash = hash_password(password)  # each with its own salt
+            user.must_change_password = True
+        await session.commit()
+        return [user.email for user in users]
 
 
 async def clinic_counts() -> tuple[dict, dict]:

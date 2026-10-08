@@ -14,6 +14,8 @@ const EXPIRES_KEY = 'bb.expires';
 // The clinic the owner of the service is looking at. A clinic login never
 // sets it: the server holds a clinic login to its own clinic anyway.
 const CLINIC_KEY = 'bb.clinic';
+// The server's answer to a login still holding the password the owner gave.
+const CHOOSE_PASSWORD = 'Choose your own password first';
 
 // Storage can be refused (private browsing, blocked site data). The token
 // then lasts as long as the page does.
@@ -113,6 +115,10 @@ export async function api(path, { method = 'GET', body, query, auth = true } = {
     // switched off: sign in again, saying why.
     clearToken();
     window.dispatchEvent(new CustomEvent('bb:signed-out', { detail: { expired: true, message } }));
+  }
+  if (response.status === 403 && auth && data && data.detail === CHOOSE_PASSWORD) {
+    // The owner gave this login a new password: it has to choose its own.
+    window.dispatchEvent(new CustomEvent('bb:choose-password'));
   }
   throw new ApiError(response.status, message, Number(response.headers.get('Retry-After')) || 0);
 }

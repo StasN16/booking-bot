@@ -46,6 +46,10 @@ class Settings(BaseSettings):
     JWT_SECRET: str = ""
     ADMIN_PASSWORD: str = ""
     JWT_HOURS: int = 12
+    # The password a clinic user is given (a new user, or New password on
+    # the Clinics page). It is only a start: the user must choose their own
+    # at first sign-in. Blank gives each one a random password instead.
+    CLINIC_START_PASSWORD: str = ""
     SENTRY_DSN: str = ""
 
     class Config:

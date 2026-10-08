@@ -17,7 +17,7 @@ I18N = (DASHBOARD / "js" / "i18n.js").read_text(encoding="utf-8")
 
 KEY_PREFIXES = ("app", "nav", "lang", "common", "err", "login", "cal", "status", "appt",
                 "wa", "summary", "book", "list", "cust", "team", "treat", "stats", "set",
-                "clinic", "clinics", "logins", "password")
+                "clinic", "clinics", "logins", "password", "choose")
 KEY_LITERAL = re.compile(r"'((?:%s)\.[A-Za-z0-9.]+)'" % "|".join(KEY_PREFIXES))
 
 

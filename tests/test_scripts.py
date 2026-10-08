@@ -22,6 +22,7 @@ def load(name):
 
 setup_local_db = load("setup_local_db")
 configure = load("configure")
+start_password = load("start_password")
 
 SUPABASE = ("postgresql+asyncpg://postgres.ref:secret@"
             "aws-1-eu-central-1.pooler.supabase.com:5432/postgres")
@@ -203,3 +204,30 @@ class TestCredentialChecks:
         monkeypatch.setattr(httpx, "get", lambda *a, **k: self.fake_response(401, {}))
         _, message = configure.check_openai("sk-very-secret-value")
         assert "sk-very-secret-value" not in message
+
+
+class TestStartPassword:
+    @pytest.fixture
+    def env(self, tmp_path, monkeypatch):
+        path = tmp_path / ".env"
+        path.write_text("ADMIN_PASSWORD=owner-secret\nCLINIC_START_PASSWORD=old-start-1\n")
+        monkeypatch.setattr(start_password.configure, "ENV", path)
+        return path
+
+    @pytest.mark.parametrize("password, accepted", [
+        ("Start-2026", True), ("short", False), (" Start-2026", False), ("St${HOME}26", False),
+    ])
+    def test_what_is_accepted(self, password, accepted):
+        assert (start_password.problem_with(password) is None) == accepted
+
+    def test_it_is_saved_in_env_and_nothing_else_changes(self, env, capsys):
+        assert start_password.main(["Start-2026"]) == 0
+        lines = env.read_text().splitlines()
+        assert configure.get(lines, "CLINIC_START_PASSWORD") == "Start-2026"
+        assert configure.get(lines, "ADMIN_PASSWORD") == "owner-secret"
+        assert "Restart the bot" in capsys.readouterr().out
+
+    def test_a_short_one_is_not_saved(self, env):
+        before = env.read_text()
+        assert start_password.main(["short"]) == 1
+        assert env.read_text() == before

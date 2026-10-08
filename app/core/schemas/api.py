@@ -48,6 +48,8 @@ class MeOut(BaseModel):
     email: str | None = None
     name: str | None = None
     business_id: str | None = None
+    # Signed in with a password the owner gave: choose one's own first.
+    must_change_password: bool = False
 
 
 class PasswordChange(BaseModel):
@@ -381,6 +383,8 @@ class ClinicLoginOut(BaseModel):
     email: str
     name: str | None = None
     is_active: bool
+    # Still holding the password the owner gave, not one of their own.
+    must_change_password: bool = False
     last_login_at: str | None = None
 
 

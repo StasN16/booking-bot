@@ -16,7 +16,7 @@ import { openBooking } from './views/booking.js';
 import calendar from './views/calendar.js';
 import clinics from './views/clinics.js';
 import customers, { openCustomer } from './views/customers.js';
-import { renderLogin } from './views/login.js';
+import { renderChoosePassword, renderLogin } from './views/login.js';
 import settings from './views/settings.js';
 import stats from './views/stats.js';
 import team from './views/team.js';
@@ -43,6 +43,7 @@ let signedIn = false;
 let main = null; // the area pages draw into, once the frame is up
 let page = null; // what the current page returned
 let expiryTimer = null;
+let choosing = null; // { current } while a clinic user must choose their own password
 
 const ctx = {
   me: null, // { role, email, name, business_id }
@@ -161,6 +162,8 @@ const ctx = {
     if (main) {
       frame();
       route();
+    } else if (choosing) {
+      showChoosePassword(choosing.current);
     } else if (!signedIn) {
       showLogin();
     }
@@ -205,6 +208,7 @@ function showLogin({ expired = false, message = '' } = {}) {
   page = null;
   main = null;
   signedIn = false;
+  choosing = null;
   ctx.me = null;
   ctx.clinics = [];
   clearTimeout(expiryTimer);
@@ -213,13 +217,19 @@ function showLogin({ expired = false, message = '' } = {}) {
   renderLogin(root, { expired, message, onSignedIn: start, onLanguage: toggleLanguage });
 }
 
-async function start() {
+/** `password` is the one just typed at sign-in, if this follows a sign-in. */
+async function start({ password = '' } = {}) {
   signedIn = true;
   main = null;
+  choosing = null;
   scheduleSignOut();
   fill(root, h('div', { class: 'boot' }, spinner()));
   try {
     ctx.me = await api('/auth/me');
+    if (ctx.me.must_change_password) {
+      showChoosePassword(password);
+      return;
+    }
     if (ctx.isOwner) await ctx.loadClinics();
     await ctx.loadReference();
   } catch (error) {
@@ -231,6 +241,23 @@ async function start() {
   }
   frame();
   route();
+}
+
+/** Signed in with the owner's password: nothing opens until they choose their own. */
+function showChoosePassword(current = '') {
+  if (page && page.unmount) page.unmount();
+  page = null;
+  main = null;
+  choosing = { current };
+  closeDialogs();
+  document.title = t('choose.title');
+  renderChoosePassword(root, {
+    email: ctx.me && ctx.me.email,
+    current,
+    onDone: () => start(),
+    onSignOut: () => ctx.signOut(),
+    onLanguage: toggleLanguage,
+  });
 }
 
 function visibleRoutes() {
@@ -323,6 +350,10 @@ window.addEventListener('hashchange', route);
 window.addEventListener('bb:signed-out', (event) => {
   const detail = event.detail || {};
   if (signedIn) showLogin({ expired: Boolean(detail.expired), message: detail.message || '' });
+});
+// The owner gave this login a new password while it was signed in.
+window.addEventListener('bb:choose-password', () => {
+  if (signedIn && !choosing) showChoosePassword();
 });
 document.addEventListener('visibilitychange', tick);
 setInterval(tick, REFRESH_MS);

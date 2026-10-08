@@ -58,6 +58,7 @@ def serialize_login(user) -> dict:
         "email": user.email,
         "name": user.name,
         "is_active": bool(user.is_active),
+        "must_change_password": bool(user.must_change_password),
         "last_login_at": user.last_login_at.isoformat() if user.last_login_at else None,
     }
 

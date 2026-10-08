@@ -525,6 +525,89 @@ class TestWhichClinicARequestSees:
             await self.scope(Principal("clinic", user_id="u-1", business_id="clinic-b"))
         assert raised.value.status_code == 401
 
+    async def test_a_login_with_the_owners_password_sees_nothing_yet(self, known):
+        """Refused, but not signed out: it is asked for a password of its own."""
+        from app.dependencies import Principal
+        from app.services import accounts
+        known["u-1"] = accounts.CHOOSE_PASSWORD
+        with pytest.raises(HTTPException) as raised:
+            await self.scope(Principal("clinic", user_id="u-1", business_id="clinic-b"))
+        assert (raised.value.status_code, raised.value.detail) == (403, accounts.CHOOSE_PASSWORD)
+
+
+class TestStartPassword:
+    """The password the owner hands a clinic user, and replacing it."""
+
+    def test_the_start_password_from_env_is_given(self, monkeypatch):
+        from app.services import accounts
+        monkeypatch.setattr(settings, "CLINIC_START_PASSWORD", "Start-2026")
+        assert accounts.given_password() == "Start-2026"
+
+    def test_without_one_each_user_gets_a_random_password(self, monkeypatch):
+        from app.services import accounts
+        monkeypatch.setattr(settings, "CLINIC_START_PASSWORD", "")
+        first, second = accounts.given_password(), accounts.given_password()
+        assert first != second and len(first) >= 12
+
+    @pytest.mark.parametrize("new, reason", [
+        ("Start-2026", "start password"),
+        ("my-current-one", "same as the current"),
+        ("short", "at least 8"),
+    ])
+    async def test_a_new_password_must_really_be_new(self, monkeypatch, new, reason):
+        from app.services import accounts
+        monkeypatch.setattr(settings, "CLINIC_START_PASSWORD", "Start-2026")
+        with pytest.raises(accounts.AccountError) as refused:
+            await accounts.change_password("u-1", "my-current-one", new)
+        assert reason in str(refused.value)
+
+    async def test_choosing_a_password_is_open_while_everything_else_is_closed(self, monkeypatch):
+        """Who am I, and change my password, answer a login holding the owner's password."""
+        from types import SimpleNamespace
+        from app.services import accounts
+
+        user = SimpleNamespace(business_id="clinic-b", is_active=True, must_change_password=True)
+        business = SimpleNamespace(is_active=True)
+
+        class Session:
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *exc):
+                return False
+
+            async def execute(self, query):
+                return SimpleNamespace(first=lambda: (user, business))
+
+        monkeypatch.setattr(accounts, "async_session", Session)
+        user_id = "00000000-0000-0000-0000-000000000001"
+        assert await accounts.login_problem(user_id, "clinic-b") == accounts.CHOOSE_PASSWORD
+        assert await accounts.login_problem(user_id, "clinic-b", choosing_password=True) is None
+        user.must_change_password = False
+        assert await accounts.login_problem(user_id, "clinic-b") is None
+
+    def test_the_dashboard_is_told_to_ask_for_a_new_password(self, configured, monkeypatch):
+        from types import SimpleNamespace
+        from fastapi.testclient import TestClient
+        from app.main import app
+        from app.services import accounts
+
+        async def login_problem(user_id, business_id, choosing_password=False):
+            return None if choosing_password else accounts.CHOOSE_PASSWORD
+
+        async def get_login(user_id):
+            return SimpleNamespace(email="dana@clinic.co.il", name=None, business_id="clinic-b",
+                                   must_change_password=True)
+
+        monkeypatch.setattr(accounts, "login_problem", login_problem)
+        monkeypatch.setattr(accounts, "get_login", get_login)
+        token = issue_token(subject="user:u-1", role="clinic", business_id="clinic-b")["access_token"]
+        client = TestClient(app)
+        me = client.get("/api/v1/auth/me", headers={"Authorization": f"Bearer {token}"})
+        assert me.status_code == 200 and me.json()["must_change_password"] is True
+        data = client.get("/api/v1/therapists", headers={"Authorization": f"Bearer {token}"})
+        assert data.status_code == 403
+
 
 class TestOwnerOnly:
     def test_a_clinic_login_cannot_reach_the_owners_pages(self):

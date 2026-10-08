@@ -107,8 +107,10 @@ Clinics page, no other clinic's customers.
    account rather than yours.
 4. **Add its user.** The **Users** window opens by itself. A user is the
    email and password the clinic signs in with. Type the clinic's email and
-   press **Create user**. The password is shown **once**: copy it and send
-   it to the clinic privately.
+   press **Create user**. Send the clinic its email and the password shown:
+   the start password (below), or a random one if you have not set one.
+   The first time the clinic signs in, it must choose its own password
+   before anything else opens.
 5. **Add its team and treatments.** Press **Open dashboard** on the
    clinic's card, or leave this to the clinic. The bot answers on the new
    number at once, and can book as soon as both exist.
@@ -122,13 +124,29 @@ WhatsApp → Configuration → Webhook fields has `messages` subscribed.
 | To | Do this |
 |---|---|
 | See a clinic's dashboard | Clinics → **Open dashboard**. On a computer, the menu under the clinic's name switches too. |
-| Give a clinic a new password | Clinics → **Users** → **New password**. The old one stops working. |
+| Give a clinic a new password | Clinics → **Users** → **New password**. The old one stops working, and the clinic chooses its own again at its next sign-in. |
 | Lock a user out | Clinics → **Users**, switch **Dashboard access** off. They are signed out at once. |
 | Pause a clinic | Clinics → **Edit**, switch **Clinic is active** off. Its users, bot and reminders stop; its data stays. |
 
 A clinic changes its own password in Settings. The **main clinic** is the
 one `BUSINESS_ID` in `.env` names: the one you see first, and the only one
 that may use the WhatsApp number in `.env`.
+
+### The start password
+
+Every new user, and every **New password**, gets the same start password,
+so there is nothing to copy each time. Set it once, putting yours in
+place of `YOUR-START-PASSWORD`:
+
+```bash
+poetry run python scripts/start_password.py YOUR-START-PASSWORD
+```
+
+Add `--everyone` to also give it, now, to every clinic user there already
+is. Then restart the bot. Since every clinic knows the start password, a
+user signing in with it must choose their own before anything else opens;
+the Users window marks who has not done so yet. Your owner password is
+separate and does not change.
 
 ## Settings (`.env`)
 
@@ -144,6 +162,7 @@ that may use the WhatsApp number in `.env`.
 | `WHATSAPP_TOKEN`, `WHATSAPP_PHONE_ID`, `WHATSAPP_VERIFY_TOKEN` | The WhatsApp Cloud API connection. The phone ID is the main clinic's number. Every clinic's number uses this token unless the clinic has its own. |
 | `ADMIN_PASSWORD`, `JWT_SECRET` | Your owner password (email left empty), and the key every sign-in is signed with. If either is blank, the dashboard stays locked. |
 | `JWT_HOURS` | How long a dashboard sign-in lasts. Defaults to 12. |
+| `CLINIC_START_PASSWORD` | The password new clinic users start with (see [The start password](#the-start-password)). Blank: a random one each time. |
 | `REPLY_DELAY_SECONDS` | A short pause before the bot answers, so it reads as typed. Defaults to 0.5. |
 | `NGROK_DOMAIN` | Optional fixed ngrok domain, so the webhook URL never changes. |
 | `REMINDERS_ENABLED`, `REMINDER_POLL_MINUTES` | The reminder loop. Defaults to on, every 10 minutes. |
@@ -162,6 +181,7 @@ poetry run python scripts/configure.py --check
 | `scripts/setup_mac.sh` | One-time Mac setup. |
 | `scripts/start.sh` | Starts the server and the tunnel. |
 | `scripts/configure.py` | Fills in missing `.env` values and tests the credentials (`--check` only tests). |
+| `scripts/start_password.py` | Sets the password new clinic users start with; `--everyone` gives it to existing users too. |
 | `scripts/setup_local_db.py` | Creates the local database, applies migrations and adds the demo clinic. |
 | `scripts/migrate_supabase.py` | Applies migrations to Supabase without touching `.env`. |
 | `scripts/integration_test.py` | Runs the full booking flow and the dashboard API against a real database, then cleans up. |

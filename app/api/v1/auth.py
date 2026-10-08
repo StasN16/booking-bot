@@ -109,12 +109,14 @@ async def me(principal: Principal = Depends(current_user)):
     """Who is signed in, so the dashboard shows the owner's pages or a clinic's."""
     if principal.is_owner:
         return {"role": principal.role}
-    problem = await accounts.login_problem(principal.user_id, principal.business_id)
+    problem = await accounts.login_problem(principal.user_id, principal.business_id,
+                                           choosing_password=True)
     if problem:
         raise HTTPException(status_code=401, detail=problem)
     user = await accounts.get_login(principal.user_id)
     return {"role": principal.role, "email": user.email, "name": user.name,
-            "business_id": str(user.business_id)}
+            "business_id": str(user.business_id),
+            "must_change_password": bool(user.must_change_password)}
 
 
 @router.post("/auth/password")
@@ -123,7 +125,8 @@ async def change_password(body: PasswordChange, principal: Principal = Depends(c
     if principal.is_owner:
         raise HTTPException(status_code=400,
                             detail="The owner's password is set in the .env file, as ADMIN_PASSWORD")
-    problem = await accounts.login_problem(principal.user_id, principal.business_id)
+    problem = await accounts.login_problem(principal.user_id, principal.business_id,
+                                           choosing_password=True)
     if problem:
         raise HTTPException(status_code=401, detail=problem)
     try:

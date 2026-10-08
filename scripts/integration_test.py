@@ -644,9 +644,11 @@ async def check_two_clinics():
             email = f"integration-{second[:8]}@example.com"
             r = await client.post(f"/api/v1/platform/clinics/{second}/logins", headers=owner,
                                   json={"email": email, "name": "Integration"})
-            check("and a login, its password shown once",
-                  r.status_code == 201 and len(r.json().get("password", "")) >= 12, str(r.status_code))
-            login_id, password = r.json()["login"]["id"], r.json()["password"]
+            given = r.json().get("password", "") if r.status_code == 201 else ""
+            check("and a user, with the start password or a random one to pass on",
+                  given == settings.CLINIC_START_PASSWORD if settings.CLINIC_START_PASSWORD else len(given) >= 12,
+                  str(r.status_code))
+            login_id, password = r.json()["login"]["id"], given
 
             r = await client.post("/api/v1/auth/login", json={"email": email.upper(), "password": password})
             # The status only: the body holds a live token, which has no place in a log.
@@ -655,6 +657,18 @@ async def check_two_clinics():
 
             me = (await client.get("/api/v1/auth/me", headers=clinic)).json()
             check("it is told which clinic it is", me.get("business_id") == second, str(me))
+            check("and that it must choose its own password", me.get("must_change_password") is True, str(me))
+            r = await client.get("/api/v1/therapists", headers=clinic)
+            check("until it does, it sees nothing", r.status_code == 403, str(r.status_code))
+            own = f"own-{uuid.uuid4().hex[:12]}"
+            r = await client.post("/api/v1/auth/password", headers=clinic,
+                                  json={"current_password": password, "new_password": password})
+            check("keeping the given password is refused", r.status_code == 400, str(r.status_code))
+            r = await client.post("/api/v1/auth/password", headers=clinic,
+                                  json={"current_password": password, "new_password": own})
+            me = (await client.get("/api/v1/auth/me", headers=clinic)).json()
+            check("once it chooses one, it is in", r.status_code == 200 and me.get("must_change_password") is False,
+                  str(r.status_code))
 
             team = [t["name"] for t in (await client.get("/api/v1/therapists", headers=clinic)).json()]
             check("a clinic sees only its own team", team == ["Test Therapist B"], str(team))
