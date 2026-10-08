@@ -70,6 +70,11 @@ fi
 
 # --- tools ---------------------------------------------------------------------
 
+# Homebrew now asks "Do you want to proceed with the installation? [y/n]"
+# before installing anything that brings dependencies, which is everything
+# here. The setup has already said what it installs, so it does not ask.
+export HOMEBREW_NO_ASK=1
+
 install_if_missing() {
   # $1: Homebrew name   $2: what to call it
   if brew list "$1" >/dev/null 2>&1; then
