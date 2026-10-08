@@ -75,10 +75,19 @@ def fail(result: dict):
     )
 
 
-async def serialize(session, appointment: Appointment) -> dict:
-    treatment = await session.get(Treatment, appointment.treatment_id)
-    therapist = await session.get(Therapist, appointment.therapist_id)
-    customer = await session.get(Customer, appointment.customer_id)
+async def serialize(session, appointment: Appointment, loaded: dict | None = None) -> dict:
+    """
+    The appointment as the dashboard sees it. `loaded` maps ids to
+    treatments, therapists and customers already fetched, to skip
+    looking each one up again.
+    """
+    loaded = loaded or {}
+    treatment = (loaded.get(appointment.treatment_id)
+                 or await session.get(Treatment, appointment.treatment_id))
+    therapist = (loaded.get(appointment.therapist_id)
+                 or await session.get(Therapist, appointment.therapist_id))
+    customer = (loaded.get(appointment.customer_id)
+                or await session.get(Customer, appointment.customer_id))
 
     start = to_clinic_tz(appointment.start_time)
     end = to_clinic_tz(appointment.end_time)
@@ -160,7 +169,23 @@ async def list_appointments(
         result = await session.execute(
             query.order_by(Appointment.start_time).limit(limit)
         )
-        return [await serialize(session, a) for a in result.scalars().all()]
+        appointments = result.scalars().all()
+
+        # A month on the calendar is hundreds of appointments. Three queries
+        # for everything they name, rather than three per appointment: the
+        # session keeps no lasting hold on what it loads, so looking each
+        # one up separately went back to the database every time.
+        loaded = {}
+        for model, ids in (
+            (Treatment, {a.treatment_id for a in appointments}),
+            (Therapist, {a.therapist_id for a in appointments}),
+            (Customer, {a.customer_id for a in appointments}),
+        ):
+            if ids:
+                rows = await session.execute(select(model).where(model.id.in_(ids)))
+                loaded.update((row.id, row) for row in rows.scalars())
+
+        return [await serialize(session, a, loaded) for a in appointments]
 
 
 @router.post("/appointments", response_model=AppointmentOut, status_code=201)
