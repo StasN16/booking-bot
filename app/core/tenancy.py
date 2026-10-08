@@ -65,6 +65,7 @@ class Channel:
 # without a database round trip, and so does every reply going out.
 _channels: dict[str, Channel] = {}  # business id -> its WhatsApp number
 _owners: dict[str, str] = {}  # WhatsApp phone number id -> business id
+_off: set[str] = set()  # clinics turned off: no WhatsApp in or out
 _last_refresh = 0.0
 
 # An unknown number reloads the table at most this often, so a stream of
@@ -73,19 +74,19 @@ REFRESH_AT_MOST_EVERY_SECONDS = 30.0
 
 
 async def refresh_channels() -> None:
-    """Reload every active clinic's WhatsApp number from the database."""
+    """Reload every clinic's WhatsApp number, and which are turned off."""
     global _last_refresh
     from app.core.db import async_session
     from app.core.models.business import Business
 
     async with async_session() as session:
-        rows = (await session.execute(
-            select(Business).where(Business.is_active.is_(True))
-        )).scalars().all()
+        rows = (await session.execute(select(Business))).scalars().all()
 
-    channels, owners = {}, {}
+    channels, owners, off = {}, {}, set()
     for business in rows:
-        if business.whatsapp_phone_id:
+        if not business.is_active:
+            off.add(str(business.id))
+        elif business.whatsapp_phone_id:
             channels[str(business.id)] = Channel(
                 phone_id=business.whatsapp_phone_id,
                 token=business.whatsapp_token or settings.WHATSAPP_TOKEN,
@@ -96,8 +97,18 @@ async def refresh_channels() -> None:
     _channels.update(channels)
     _owners.clear()
     _owners.update(owners)
+    _off.clear()
+    _off.update(off)
     _last_refresh = time.monotonic()
     logger.info(f"WhatsApp numbers loaded for {len(channels)} clinic(s)")
+
+
+def _home_number_in_use() -> bool:
+    """
+    Whether the number in .env answers for the clinic named by BUSINESS_ID.
+    Not once that clinic is turned off: off means off, for it as for any.
+    """
+    return bool(settings.WHATSAPP_PHONE_ID) and settings.BUSINESS_ID not in _off
 
 
 def channel(business_id=None) -> Channel | None:
@@ -105,12 +116,13 @@ def channel(business_id=None) -> Channel | None:
     The number a clinic sends from. A clinic without one of its own sends
     nothing: falling back to another clinic's number would message its
     customers in someone else's name. Only the clinic named by BUSINESS_ID
-    may use the number in .env, as a single-clinic setup always has.
+    may use the number in .env, as a single-clinic setup always has, and
+    only while it is on.
     """
     business_id = str(business_id or current_business_id())
     if business_id in _channels:
         return _channels[business_id]
-    if business_id == settings.BUSINESS_ID and settings.WHATSAPP_PHONE_ID:
+    if business_id == settings.BUSINESS_ID and _home_number_in_use():
         return Channel(settings.WHATSAPP_PHONE_ID, settings.WHATSAPP_TOKEN)
     return None
 
@@ -120,7 +132,7 @@ async def business_for_phone_number(phone_number_id: str | None) -> str | None:
     if not phone_number_id:
         # Meta always says which number a message came to. Without it there
         # is only the single-clinic answer.
-        return settings.BUSINESS_ID
+        return settings.BUSINESS_ID if settings.BUSINESS_ID not in _off else None
 
     if phone_number_id not in _owners and \
             time.monotonic() - _last_refresh > REFRESH_AT_MOST_EVERY_SECONDS:
@@ -129,7 +141,7 @@ async def business_for_phone_number(phone_number_id: str | None) -> str | None:
 
     if phone_number_id in _owners:
         return _owners[phone_number_id]
-    if phone_number_id == settings.WHATSAPP_PHONE_ID:
+    if phone_number_id == settings.WHATSAPP_PHONE_ID and _home_number_in_use():
         return settings.BUSINESS_ID
     return None
 
@@ -139,4 +151,5 @@ def forget_channels() -> None:
     global _last_refresh
     _channels.clear()
     _owners.clear()
+    _off.clear()
     _last_refresh = 0.0

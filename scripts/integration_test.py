@@ -722,6 +722,11 @@ async def check_two_clinics():
             r = await client.get("/api/v1/therapists", headers=clinic)
             check("a login switched off is locked out at once", r.status_code == 401, str(r.status_code))
 
+            r = await client.put(f"/api/v1/platform/clinics/{second}", headers=owner, json={"is_active": False})
+            found = await tenancy.business_for_phone_number(number)
+            check("a clinic turned off answers no WhatsApp messages",
+                  r.status_code == 200 and found is None and tenancy.channel(second) is None, str(found))
+
     finally:
         if second:
             await remove_clinic(second)

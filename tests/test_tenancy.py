@@ -87,6 +87,10 @@ class TestSendingNumber:
             assert await whatsapp.send_message("972500000000", "hi") is True
         assert posted == [(f"{whatsapp.WHATSAPP_API_URL}/222/messages", "Bearer b-token")]
 
+    def test_the_home_clinic_turned_off_sends_nothing(self):
+        tenancy._off.add("home-clinic")
+        assert tenancy.channel() is None
+
     @pytest.mark.asyncio
     async def test_a_clinic_without_a_number_fails_to_send(self, monkeypatch):
         import httpx
@@ -123,3 +127,75 @@ class TestReceivingNumber:
     @pytest.mark.asyncio
     async def test_no_number_means_the_home_clinic(self):
         assert await tenancy.business_for_phone_number(None) == "home-clinic"
+
+    @pytest.mark.asyncio
+    async def test_the_home_clinic_turned_off_answers_nobody(self):
+        """Off means off, even on the number in .env."""
+        tenancy._off.add("home-clinic")
+        assert await tenancy.business_for_phone_number("111") is None
+        assert await tenancy.business_for_phone_number(None) is None
+
+
+class TestLoadingNumbers:
+    """refresh_channels() against a stand-in for the database."""
+
+    @pytest.fixture
+    def stored(self, monkeypatch):
+        from types import SimpleNamespace
+        from app.core import db
+
+        rows = []
+
+        class Result:
+            def scalars(self):
+                return SimpleNamespace(all=lambda: rows)
+
+        class Session:
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *exc):
+                return False
+
+            async def execute(self, query):
+                return Result()
+
+        monkeypatch.setattr(db, "async_session", Session)
+
+        def add(business_id, phone_id=None, token=None, active=True):
+            rows.append(SimpleNamespace(id=business_id, whatsapp_phone_id=phone_id,
+                                        whatsapp_token=token, is_active=active))
+            return rows[-1]
+        return add
+
+    @pytest.mark.asyncio
+    async def test_numbers_and_tokens_are_loaded(self, stored):
+        stored("clinic-c", phone_id="333", token="c-token")
+        stored("clinic-d", phone_id="444")
+        await tenancy.refresh_channels()
+        assert tenancy.channel("clinic-c") == tenancy.Channel("333", "c-token")
+        assert tenancy.channel("clinic-d") == tenancy.Channel("444", "server-token")
+        assert await tenancy.business_for_phone_number("444") == "clinic-d"
+
+    @pytest.mark.asyncio
+    async def test_a_clinic_turned_off_has_no_number(self, stored):
+        stored("clinic-c", phone_id="333", active=False)
+        await tenancy.refresh_channels()
+        assert tenancy.channel("clinic-c") is None
+        assert await tenancy.business_for_phone_number("333") is None
+
+    @pytest.mark.asyncio
+    async def test_the_home_clinic_turned_off_loses_the_env_number(self, stored):
+        stored("home-clinic", active=False)
+        await tenancy.refresh_channels()
+        assert tenancy.channel("home-clinic") is None
+        assert await tenancy.business_for_phone_number("111") is None
+
+    @pytest.mark.asyncio
+    async def test_turned_back_on_it_answers_again(self, stored):
+        home = stored("home-clinic", active=False)
+        await tenancy.refresh_channels()
+        home.is_active = True
+        await tenancy.refresh_channels()
+        assert tenancy.channel("home-clinic") == tenancy.Channel("111", "server-token")
+        assert await tenancy.business_for_phone_number("111") == "home-clinic"
