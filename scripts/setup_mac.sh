@@ -138,6 +138,8 @@ fi
 step "Python packages"
 poetry env use "$PYTHON" >/dev/null
 poetry install --no-interaction
+# start.sh installs again only when poetry.lock changes after this.
+cp poetry.lock "$ROOT/logs/installed-poetry.lock"
 ok "installed"
 
 # --- configuration -------------------------------------------------------------

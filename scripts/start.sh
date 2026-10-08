@@ -45,6 +45,20 @@ env_value() {
     | tr -d '\r' | sed -E "s/^[[:space:]]*['\"]?//; s/['\"]?[[:space:]]*$//"
 }
 
+# --- packages ------------------------------------------------------------------
+
+# A newly pulled version may need a package this Mac does not have yet.
+# Installing only when poetry.lock has changed keeps every other start quick,
+# and possible without the internet.
+INSTALLED_LOCK="$LOGS/installed-poetry.lock"
+if ! cmp -s poetry.lock "$INSTALLED_LOCK" 2>/dev/null; then
+  printf 'Installing what this version needs ...\n'
+  if ! poetry install --no-interaction > "$LOGS/install.log" 2>&1; then
+    die "Could not install the packages. Details are in logs/install.log"
+  fi
+  cp poetry.lock "$INSTALLED_LOCK"
+fi
+
 # --- database ------------------------------------------------------------------
 
 if command -v brew >/dev/null 2>&1; then
