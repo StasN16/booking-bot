@@ -412,8 +412,14 @@ async def check_reminders(treatment):
             from app.core.models.therapist import Therapist
             therapist = (await s.execute(select(Therapist))).scalars().first()
 
+            # The reminder run below is told it is ten years from now, so it
+            # finds this appointment and nothing else. Run at today's date it
+            # would also pick up every real appointment that happens to be
+            # due, and with WhatsApp stubbed out their reminders would be
+            # marked sent without ever reaching the customer.
+            virtual_now = clinic_now() + timedelta(days=3653)
             # Placed squarely inside the 24 hour window.
-            start = clinic_now() + timedelta(hours=23)
+            start = virtual_now + timedelta(hours=23)
             appt = Appointment(
                 id=uuid.uuid4(), business_id=reminders.BUSINESS_ID,
                 customer_id=customer.id, therapist_id=therapist.id,
@@ -425,7 +431,7 @@ async def check_reminders(treatment):
             await s.commit()
             appt_id = appt.id
 
-        result = await reminders.send_due_reminders()
+        result = await reminders.send_due_reminders(now=virtual_now)
         check("24h reminder is sent for an appointment 23h away",
               result["sent"]["24h"] == 1, str(result["sent"]))
 
@@ -437,7 +443,7 @@ async def check_reminders(treatment):
               bool(sent) and sent[0][0] == TEST_PHONE)
 
         before = len(sent)
-        again = await reminders.send_due_reminders()
+        again = await reminders.send_due_reminders(now=virtual_now)
         check("running again does not send a duplicate",
               again["total"] == 0 and len(sent) == before,
               f"second run sent {again['total']}")
