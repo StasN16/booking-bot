@@ -75,22 +75,42 @@ fi
 # here. The setup has already said what it installs, so it does not ask.
 export HOMEBREW_NO_ASK=1
 
+# Fails (returns 1) rather than stopping, so the caller decides what a
+# missing tool means.
 install_if_missing() {
   # $1: Homebrew name   $2: what to call it
   if brew list "$1" >/dev/null 2>&1; then
     ok "$2"
-  else
-    printf '    installing %s ...\n' "$2"
-    brew install "$1" || die "Could not install $2. Try by hand: brew install $1"
-    ok "$2 installed"
+    return 0
   fi
+  printf '    installing %s ...\n' "$2"
+  # A download cut off halfway usually gets through on another try.
+  local attempt
+  for attempt in 1 2 3; do
+    if brew install "$1"; then
+      ok "$2 installed"
+      return 0
+    fi
+    if [ "$attempt" -lt 3 ]; then
+      note "the download failed; trying again in 10 seconds ($attempt of 3)"
+      sleep 10
+    fi
+  done
+  return 1
 }
 
+OFFLINE_HINT="Check the internet connection and run this again. If it keeps failing, your network may block the download: connect to your phone's hotspot for the setup."
+
 step "Tools"
-install_if_missing python@3.12   "Python 3.12"
-install_if_missing poetry        "Poetry"
-install_if_missing postgresql@16 "PostgreSQL 16"
-install_if_missing ngrok         "ngrok"
+install_if_missing python@3.12   "Python 3.12"   || die "Could not install Python 3.12. $OFFLINE_HINT"
+install_if_missing poetry        "Poetry"        || die "Could not install Poetry. $OFFLINE_HINT"
+install_if_missing postgresql@16 "PostgreSQL 16" || die "Could not install PostgreSQL 16. $OFFLINE_HINT"
+# Only start.sh needs ngrok, so without it everything else still gets set up.
+NGROK_MISSING=""
+if ! install_if_missing ngrok "ngrok"; then
+  NGROK_MISSING=1
+  note "ngrok could not be downloaded; carrying on with everything else"
+fi
 
 PYTHON="$(brew --prefix python@3.12)/bin/python3.12"
 PG_READY="$(brew --prefix postgresql@16)/bin/pg_isready"
@@ -145,7 +165,9 @@ ngrok_has_token() {
 }
 
 step "ngrok"
-if ngrok_has_token; then
+if [ -n "$NGROK_MISSING" ]; then
+  note "not installed, so its authtoken is asked for when it is"
+elif ngrok_has_token; then
   ok "authtoken configured"
 else
   echo "    ngrok gives WhatsApp a public address for this Mac. It needs your authtoken,"
@@ -178,6 +200,19 @@ else
 fi
 
 # --- done ------------------------------------------------------------------------
+
+if [ -n "$NGROK_MISSING" ]; then
+  step "Almost done"
+  cat <<'EOF'
+    Everything is set up except ngrok, which could not be downloaded. Your
+    network may block ngrok's download site. Connect this Mac to your phone's
+    hotspot, run the setup again (it only does what is missing), then switch
+    back to your usual WiFi:
+
+        ./scripts/setup_mac.sh
+EOF
+  exit 1
+fi
 
 step "Done"
 cat <<'EOF'
