@@ -144,7 +144,7 @@ export default function appointmentsView(container, params, ctx) {
       return;
     }
     const days = [...groupBy(shown, (a) => a.date)];
-    fill(results, 
+    fill(results,
       rows.length >= LIMIT ? h('p', { class: 'hint' }, t('list.limit')) : null,
       ...days.map(([date, items]) => h('section', { class: 'day-group' },
         h('h2', { class: ['day-head', date === today && 'is-today'] },

@@ -66,18 +66,23 @@ export async function openAppointment(ctx, given) {
 
     fill(m.body, done ? tellCustomer() : null, details, contact, notes, moving ? movePanel() : null);
 
-    const actions = upcoming() && !moving;
-    fill(m.foot, 
-      actions ? h('button', { class: 'btn btn-danger-ghost', type: 'button', onclick: cancel }, t('appt.cancel')) : null,
+    // Only an upcoming appointment can be moved or cancelled; anything else
+    // gets no footer at all rather than an empty bar.
+    if (!upcoming() || moving) {
+      fill(m.foot);
+      return;
+    }
+    fill(m.foot,
+      h('button', { class: 'btn btn-danger-ghost', type: 'button', onclick: cancel }, t('appt.cancel')),
       h('span', { class: 'spacer' }),
-      actions ? h('button', {
+      h('button', {
         class: 'btn btn-primary',
         type: 'button',
         onclick: () => {
           moving = true;
           render();
         },
-      }, icon('clock'), h('span', {}, t('appt.move'))) : null);
+      }, icon('clock'), h('span', {}, t('appt.move'))));
   }
 
   function notesEditor() {

@@ -48,7 +48,7 @@ export default function customersView(container, params, ctx) {
       fill(results, empty(t(search.value.trim() ? 'cust.noMatch' : 'cust.empty')));
       return;
     }
-    fill(results, 
+    fill(results,
       list.length >= LIMIT ? h('p', { class: 'hint' }, t('cust.limit')) : null,
       h('div', { class: 'table' },
         h('div', { class: 'table-head', 'aria-hidden': 'true' },

@@ -141,7 +141,7 @@ export default function statsView(container, params, ctx) {
     }, t(metric === 'revenue' ? 'stats.revenue' : 'stats.appointments')));
 
     const format = state.metric === 'revenue' ? fmt.money : fmt.number;
-    fill(content, 
+    fill(content,
       kpis,
       h('section', { class: 'card' },
         h('div', { class: 'section-head' },

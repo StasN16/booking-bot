@@ -175,7 +175,7 @@ export default function calendar(container, params, ctx) {
     }
 
     const view = state.view === 'month' ? month(D.range(from, to)) : grid(state.view === 'day' ? [state.date] : D.range(from, to));
-    fill(body, 
+    fill(body,
       appointments.length >= LIMIT ? h('p', { class: 'hint' }, t('cal.limit')) : null,
       view.el);
     if (view.scroller) {
