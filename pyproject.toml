@@ -9,7 +9,11 @@ requires-python = ">=3.12,<4.0"
 dependencies = [
     "fastapi (>=0.135.1,<0.136.0)",
     "uvicorn (>=0.41.0,<0.42.0)",
-    "sqlalchemy (>=2.0.48,<3.0.0)",
+    "sqlalchemy[asyncio] (>=2.0.48,<3.0.0)",
+    # The async engine runs on greenlet. SQLAlchemy installs it only on the
+    # machines it lists, and an Apple Silicon Mac ("arm64") is not one, so
+    # without this line the bot cannot reach its database on a new Mac.
+    "greenlet (>=3.3.2,<4.0.0)",
     "asyncpg (>=0.31.0,<0.32.0)",
     "alembic (>=1.18.4,<2.0.0)",
     "pydantic (>=2.12.5,<3.0.0)",
