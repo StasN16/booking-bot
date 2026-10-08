@@ -1,7 +1,9 @@
 # Booking Bot
 
-A WhatsApp assistant that books, moves and cancels appointments for a
-clinic, plus a web dashboard where the clinic sees and manages all of it.
+A WhatsApp assistant that books, moves and cancels appointments for
+clinics, plus a web dashboard where each clinic sees and manages its own.
+One server runs any number of clinics. Each has its own WhatsApp number,
+dashboard and login, and sees only its own data.
 
 - **The bot** answers customers on WhatsApp in Hebrew, English or Russian,
   offers only times that are really free, and books through the same rules
@@ -55,8 +57,10 @@ cd booking-bot
 ```
 
 This starts the server and the ngrok tunnel WhatsApp reaches it through.
-Then open **http://localhost:8000** and sign in with the dashboard
-password. `Ctrl+C` in the Terminal stops everything.
+It also brings the database up to date, so after `git pull` there is
+nothing else to run. Then open **http://localhost:8000**, leave **Email**
+empty and sign in with the dashboard password. `Ctrl+C` in the Terminal
+stops everything.
 
 If the script says **"The webhook URL changed"**, WhatsApp messages stop
 arriving until you paste the new address into Meta: WhatsApp →
@@ -70,18 +74,60 @@ line.
 
 | Page | What it does |
 |---|---|
+| Clinics | Only for you, the owner. Add clinics, set their WhatsApp numbers and logins, and open any clinic's dashboard. |
 | Calendar | Day (a column per therapist), week or month. Click free time to book there; click an appointment to open it. Bookings made on WhatsApp appear within a minute. |
 | Appointments | Every appointment in a range of dates, with filters by status and therapist and a search by name, phone or treatment. |
 | Customers | Everyone who has written to the bot or been booked. Each card shows the customer's history and lets you turn their reminders off. |
 | Team | Each therapist's working days and hours. Free times, in the bot and on the dashboard, come from these hours. |
 | Treatments | What the bot offers, with length and price. Retiring a treatment hides it from new bookings and keeps the history. |
 | Statistics | Appointments, revenue, cancellations, and the split by treatment and therapist, for any range up to a year. |
-| Settings | The clinic's details, the dashboard language, and signing out. |
+| Settings | The clinic's details, its password, the dashboard language, and signing out. |
 
 Booking from the dashboard offers only the times the bot would offer, so
 the two can never double-book each other. Moving or cancelling does not
 message the customer. Instead, the dashboard offers a WhatsApp message,
 already written, for you to send.
+
+## Clinics
+
+You sign in as the owner (email left empty) and see every clinic. Each
+clinic signs in with its own email and password and sees only itself: no
+Clinics page, no other clinic's customers.
+
+### Adding a clinic
+
+1. **Give it a WhatsApp number in Meta.** In your developer app:
+   WhatsApp → API Setup → **Add phone number**, then confirm it with the
+   code Meta sends. The number cannot also be in use in the WhatsApp app,
+   so a new number is simplest.
+2. **Copy its Phone number ID** from the same API Setup page.
+3. **In the dashboard:** Clinics → **Add clinic**. Fill in the name, phone
+   and hours, and paste the Phone number ID. Leave **WhatsApp token**
+   empty: it is needed only when the number sits in the clinic's own Meta
+   account rather than yours.
+4. **Add its login.** The logins window opens by itself. Type the clinic's
+   email and press **Create login**. The password is shown **once**: copy
+   it and send it to the clinic privately.
+5. **Add its team and treatments.** Press **Open dashboard** on the
+   clinic's card, or leave this to the clinic. The bot answers on the new
+   number at once, and can book as soon as both exist.
+
+The new number reports to the webhook you already set in Meta, so the
+webhook settings do not change. If its messages never arrive, check that
+WhatsApp → Configuration → Webhook fields has `messages` subscribed.
+
+### Looking after clinics
+
+| To | Do this |
+|---|---|
+| See a clinic's dashboard | Clinics → **Open dashboard**. On a computer, the menu under the clinic's name switches too. |
+| Give a clinic a new password | Clinics → **Logins** → **New password**. The old one stops working. |
+| Lock a login out | Clinics → **Logins**, switch **Can sign in** off. It is signed out at once. |
+| Pause a clinic | Clinics → **Edit**, switch **Clinic is active** off. Its logins, bot and reminders stop; its data stays. |
+
+A clinic changes its own password in Settings. The **main clinic** is the
+one `BUSINESS_ID` in `.env` names: the one you see first, and the only one
+that may use the WhatsApp number in `.env`.
 
 ## Settings (`.env`)
 
@@ -91,11 +137,11 @@ already written, for you to send.
 | Key | Meaning |
 |---|---|
 | `DATABASE_URL` | The database. Setup points it at the local one and keeps earlier URLs as comments. |
-| `BUSINESS_ID` | Which clinic in the database this server runs. Leave it as the seed data set it. |
+| `BUSINESS_ID` | The main clinic: the one you see first, and the only one that may use the WhatsApp number in `.env`. Leave it as the seed data set it. |
 | `TIMEZONE` | The clinic's timezone. Every time is shown and booked in it. Defaults to `Asia/Jerusalem`. |
 | `OPENAI_API_KEY` | For GPT-4o. |
-| `WHATSAPP_TOKEN`, `WHATSAPP_PHONE_ID`, `WHATSAPP_VERIFY_TOKEN` | The WhatsApp Cloud API connection. |
-| `ADMIN_PASSWORD`, `JWT_SECRET` | Dashboard sign-in. If either is blank, the dashboard stays locked. |
+| `WHATSAPP_TOKEN`, `WHATSAPP_PHONE_ID`, `WHATSAPP_VERIFY_TOKEN` | The WhatsApp Cloud API connection. The phone ID is the main clinic's number. Every clinic's number uses this token unless the clinic has its own. |
+| `ADMIN_PASSWORD`, `JWT_SECRET` | Your owner password (email left empty), and the key every sign-in is signed with. If either is blank, the dashboard stays locked. |
 | `JWT_HOURS` | How long a dashboard sign-in lasts. Defaults to 12. |
 | `REPLY_DELAY_SECONDS` | A short pause before the bot answers, so it reads as typed. Defaults to 0.5. |
 | `NGROK_DOMAIN` | Optional fixed ngrok domain, so the webhook URL never changes. |
@@ -133,10 +179,13 @@ poetry run python scripts/integration_test.py  # against the database in .env
 app/
   main.py           the server: routes, dashboard files, reminder and audit loops
   api/v1/           webhook (WhatsApp), auth, appointments, customers, therapists,
-                    treatments, business: the API the dashboard calls
+                    treatments, business: the API the dashboard calls;
+                    platform: the owner's clinics and logins
   services/         conversation (the bot), ai_engine (GPT-4o), booking,
-                    availability, reminders, whatsapp, audit analysis
-  core/             models, schemas, database, timezone helpers, audit trail
+                    availability, reminders, whatsapp, accounts (logins),
+                    audit analysis
+  core/             models, schemas, database, timezone helpers, audit trail,
+                    tenancy (which clinic is being served, and its number)
   static/dashboard/ the dashboard: plain JavaScript modules, no build step
 migrations/         Alembic database migrations
 scripts/            setup, start, checks
@@ -147,6 +196,12 @@ The bot and the dashboard share one booking service
 (`app/services/booking.py`) and one availability calculation
 (`app/services/availability.py`), so both follow the same rules.
 
+Every request, WhatsApp message and reminder is handled on behalf of one
+clinic, and everything that reads or writes clinic data asks
+`current_business_id()` (`app/core/tenancy.py`) which one that is. A
+message finds its clinic by the WhatsApp number it was sent to; a
+dashboard request, by the login it carries.
+
 The dashboard builds everything on the page from plain text, never from
 HTML, and the server forbids inline scripts. A customer's name or note can
 only ever be displayed, never run.
@@ -156,6 +211,8 @@ only ever be displayed, never run.
 | Problem | What to do |
 |---|---|
 | The bot does not answer | Is `start.sh` running? Did it warn that the webhook URL changed? Then check the token: `poetry run python scripts/configure.py --check`. |
+| One clinic's bot does not answer | On the Clinics page, check that the clinic is on and its Phone number ID matches Meta's. The Terminal running `start.sh` names any number no clinic has. |
+| A clinic cannot sign in | Clinics → **Logins**: is **Can sign in** on? If they lost the password, press **New password**. |
 | `configure.py --check` says Meta rejected the WhatsApp token | Generate a new token for the system user in Meta Business settings and put it in `.env` as `WHATSAPP_TOKEN`. |
 | "Port 8000 is already in use" | The bot is already running in another Terminal window. Use that one, or stop it there with `Ctrl+C`. |
 | The dashboard says sign-in is not set up | Run `./scripts/setup_mac.sh`, then start the server again. |
@@ -171,5 +228,7 @@ only ever be displayed, never run.
   refused. This is planned for before going live (step 12).
 - **Turning a customer's reminders off** stops reminders only. The bot
   still answers that customer.
-- **Step 11:** syncing appointments to Google Calendar.
+- **Clinics are added by you**, on the Clinics page. There is no sign-up
+  page or billing for clinics yet.
+- **Step 11:** syncing each clinic's appointments to its Google Calendar.
 - **Step 12:** running on Railway with Supabase, instead of on this Mac.
