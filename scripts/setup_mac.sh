@@ -49,7 +49,12 @@ if find_brew; then
   ok "found"
 else
   note "Installing Homebrew. It asks for your Mac password (typing shows nothing)."
-  /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
+  # The password is asked for here, and the installer then runs without its
+  # "Press RETURN to continue" question: any key there other than return,
+  # even a stray one, cancels the whole install without saying so.
+  sudo -v || die "Homebrew needs your Mac password. Run this again and type it."
+  NONINTERACTIVE=1 /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)" \
+    || die "Homebrew did not install. The messages above say why."
   find_brew || die "Homebrew installed but cannot be found. Open a new Terminal window and run this again."
   ok "installed"
 fi
