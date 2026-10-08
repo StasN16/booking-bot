@@ -430,6 +430,23 @@ class TestDashboardServing:
         response = client.get("/health")
         assert "content-security-policy" not in response.headers
 
+    def test_api_answers_say_which_dashboard_the_server_has(self, client):
+        """An open page compares this with its own, to notice an update."""
+        version = client.get("/api/v1/auth/status").headers.get("x-dashboard-version")
+        assert version and len(version) == 12
+
+    def test_the_fingerprint_changes_when_a_dashboard_file_does(self, tmp_path, monkeypatch):
+        from app import main
+        (tmp_path / "main.js").write_text("one")
+        monkeypatch.setattr(main, "DASHBOARD_DIR", tmp_path)
+        monkeypatch.setattr(main, "_version", {"checked_at": float("-inf"), "value": ""})
+        before = main.dashboard_version()
+        assert main.dashboard_version() == before  # nothing changed
+
+        (tmp_path / "main.js").write_text("two, longer")
+        main._version["checked_at"] = float("-inf")  # as if the 5 seconds had passed
+        assert main.dashboard_version() != before
+
 
 class TestAuthStatus:
     @pytest.fixture

@@ -44,6 +44,7 @@ let main = null; // the area pages draw into, once the frame is up
 let page = null; // what the current page returned
 let expiryTimer = null;
 let choosing = null; // { current } while a clinic user must choose their own password
+let updateWaiting = false; // the server has newer dashboard files than this page
 
 const ctx = {
   me: null, // { role, email, name, business_id }
@@ -233,8 +234,9 @@ async function start({ password = '' } = {}) {
     if (ctx.isOwner) await ctx.loadClinics();
     await ctx.loadReference();
   } catch (error) {
-    // A rejected token has already brought the sign-in page back.
-    if (error.status !== 401 && signedIn) {
+    // A rejected token has already brought the sign-in page back, and a
+    // login told to choose its own password is already being asked to.
+    if (error.status !== 401 && signedIn && !choosing) {
       fill(root, h('div', { class: 'boot' }, errorBox(error, start)));
     }
     return;
@@ -303,8 +305,17 @@ function frame() {
       main)));
 }
 
+/** Load the newer dashboard now, unless a dialog holds something unsaved. */
+function reloadIfWaiting() {
+  if (!updateWaiting || document.querySelector('dialog[open]')) return false;
+  window.location.reload();
+  return true;
+}
+
 function route() {
   if (!main) return;
+  // Moving to another page is a moment where reloading loses nothing.
+  if (reloadIfWaiting()) return;
   const { path, params } = parseHash();
   const entry = visibleRoutes().find((r) => r.path === path);
   if (!entry) {
@@ -354,6 +365,16 @@ window.addEventListener('bb:signed-out', (event) => {
 // The owner gave this login a new password while it was signed in.
 window.addEventListener('bb:choose-password', () => {
   if (signedIn && !choosing) showChoosePassword();
+});
+// `git pull` updated the dashboard while this page was open. Signing in or
+// choosing a password, there is nothing to lose: load it now. Inside the
+// dashboard, wait for a page change or a return to this tab.
+window.addEventListener('bb:new-version', () => {
+  updateWaiting = true;
+  if (!main) reloadIfWaiting();
+});
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'visible') reloadIfWaiting();
 });
 document.addEventListener('visibilitychange', tick);
 setInterval(tick, REFRESH_MS);

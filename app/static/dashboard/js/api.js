@@ -17,6 +17,21 @@ const CLINIC_KEY = 'bb.clinic';
 // The server's answer to a login still holding the password the owner gave.
 const CHOOSE_PASSWORD = 'Choose your own password first';
 
+// Which dashboard files the server had when this page loaded them. A
+// different one later means it was updated while the page stayed open.
+let loadedVersion = null;
+let updateAnnounced = false;
+
+function noticeVersion(version) {
+  if (!version) return;
+  if (loadedVersion === null) {
+    loadedVersion = version;
+  } else if (version !== loadedVersion && !updateAnnounced) {
+    updateAnnounced = true;
+    window.dispatchEvent(new CustomEvent('bb:new-version'));
+  }
+}
+
 // Storage can be refused (private browsing, blocked site data). The token
 // then lasts as long as the page does.
 const memory = {};
@@ -106,6 +121,7 @@ export async function api(path, { method = 'GET', body, query, auth = true } = {
     clearTimeout(timer);
   }
 
+  noticeVersion(response.headers.get('X-Dashboard-Version'));
   const data = await response.json().catch(() => null);
   if (response.ok) return data;
 

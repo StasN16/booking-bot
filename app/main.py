@@ -1,5 +1,7 @@
 import asyncio
+import hashlib
 import logging
+import time
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -131,12 +133,35 @@ DASHBOARD_HEADERS = {
 }
 
 
+_version = {"checked_at": float("-inf"), "value": ""}
+VERSION_CHECK_EVERY_SECONDS = 5.0
+
+
+def dashboard_version() -> str:
+    """
+    Which dashboard files the server has, as a short fingerprint. A page
+    left open through `git pull` keeps running the old files; seeing the
+    fingerprint change on an API answer tells it to load the new ones.
+    """
+    now = time.monotonic()
+    if now - _version["checked_at"] >= VERSION_CHECK_EVERY_SECONDS:
+        digest = hashlib.sha1()
+        for path in sorted(DASHBOARD_DIR.rglob("*")):
+            if path.is_file():
+                stat = path.stat()
+                digest.update(f"{path.relative_to(DASHBOARD_DIR)}:{stat.st_size}:{stat.st_mtime_ns}\n".encode())
+        _version.update(checked_at=now, value=digest.hexdigest()[:12])
+    return _version["value"]
+
+
 @app.middleware("http")
 async def dashboard_headers(request: Request, call_next):
     response = await call_next(request)
     if request.url.path.startswith("/dashboard"):
         for name, value in DASHBOARD_HEADERS.items():
             response.headers[name] = value
+    elif request.url.path.startswith("/api/"):
+        response.headers["X-Dashboard-Version"] = dashboard_version()
     return response
 
 
