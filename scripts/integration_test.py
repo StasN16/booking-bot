@@ -526,6 +526,30 @@ async def check_dashboard_api(treatment):
         check("filtering by a typed number finds the customer's history",
               any(a["id"] == booked_id for a in by_phone), f"{len(by_phone)} found")
 
+        # A month on the calendar must not cost a query per appointment.
+        from sqlalchemy import event
+        from app.core.db import engine
+        statements = []
+
+        def count(*args):
+            statements.append(1)
+
+        event.listen(engine.sync_engine, "before_cursor_execute", count)
+        try:
+            listed = await api.list_appointments(
+                from_date=(day - timedelta(days=60)).isoformat(),
+                to_date=(day + timedelta(days=60)).isoformat(),
+                status=None, therapist_id=None, customer_phone=None, limit=1000)
+        finally:
+            event.remove(engine.sync_engine, "before_cursor_execute", count)
+        check("listing appointments costs the same few queries however many there are",
+              len(statements) <= 4, f"{len(listed)} appointments, {len(statements)} queries")
+
+        from app.api.v1 import therapists as therapists_api
+        team = await therapists_api.list_therapists(include_inactive=True)
+        check("therapists say when they joined, so their colours stay put",
+              all(t["created_at"] for t in team), f"{len(team)} therapists")
+
         stats = await api.statistics(from_date=day.isoformat(), to_date=day.isoformat())
         today_row = stats["by_day"][0] if stats["by_day"] else {}
         check("statistics count the booking per day",

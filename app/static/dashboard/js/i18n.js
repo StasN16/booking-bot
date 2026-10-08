@@ -1,0 +1,695 @@
+/**
+ * The dashboard's words in Hebrew and English, and formatting for dates,
+ * money and phone numbers.
+ *
+ * Hebrew is the default: the clinic and most of its customers use it.
+ * Every entry sits on its own line as 'key': value. tests/test_dashboard.py
+ * reads them that way to check both languages have every key in use.
+ */
+import { DAY_NAMES, toUTC } from './dates.js';
+
+const he = {
+  'app.name': 'יומן תורים',
+  'nav.label': 'ניווט',
+  'nav.calendar': 'יומן',
+  'nav.calendarShort': 'יומן',
+  'nav.appointments': 'תורים',
+  'nav.appointmentsShort': 'תורים',
+  'nav.customers': 'לקוחות',
+  'nav.customersShort': 'לקוחות',
+  'nav.team': 'צוות',
+  'nav.teamShort': 'צוות',
+  'nav.treatments': 'טיפולים',
+  'nav.treatmentsShort': 'טיפולים',
+  'nav.stats': 'נתונים',
+  'nav.statsShort': 'נתונים',
+  'nav.settings': 'הגדרות',
+  'nav.settingsShort': 'הגדרות',
+  'nav.signOut': 'יציאה',
+  'lang.other': 'English',
+  'lang.he': 'עברית',
+  'lang.en': 'אנגלית',
+  'lang.ru': 'רוסית',
+  'lang.unknown': 'לא ידוע',
+
+  'common.loading': 'טוען…',
+  'common.close': 'סגירה',
+  'common.cancel': 'ביטול',
+  'common.ok': 'הבנתי',
+  'common.save': 'שמירה',
+  'common.saved': 'השינויים נשמרו',
+  'common.retry': 'לנסות שוב',
+  'common.edit': 'עריכה',
+  'common.optional': 'לא חובה',
+  'common.minutes': '{n} דק׳',
+  'common.inactive': 'לא פעיל',
+  'common.showInactive': 'הצגת לא פעילים ({n})',
+  'common.reactivate': 'החזרה לפעילות',
+
+  'err.network': 'אין חיבור לשרת. בדקו שהוא פועל ונסו שוב.',
+  'err.timeout': 'השרת לא ענה בזמן. נסו שוב.',
+  'err.generic': 'משהו השתבש. נסו שוב.',
+  'err.server': 'שגיאה בשרת. הפרטים נמצאים ביומן של השרת.',
+  'err.notFound': 'לא נמצא',
+  'err.invalid': 'חלק מהפרטים לא תקינים',
+
+  'login.title': 'כניסה',
+  'login.subtitle': 'ניהול התורים של המרפאה',
+  'login.password': 'סיסמה',
+  'login.submit': 'כניסה',
+  'login.wrong': 'הסיסמה לא נכונה',
+  'login.tooMany': 'יותר מדי ניסיונות. אפשר לנסות שוב בעוד {minutes} דקות.',
+  'login.expired': 'פג הזמן של החיבור. צריך להיכנס שוב.',
+  'login.notConfigured': 'עוד לא הוגדרה סיסמה בשרת. במחשב שמריץ את השרת, הריצו את הפקודה הזו ואז הפעילו את השרת מחדש:',
+  'login.forgot': 'שכחתם את הסיסמה? היא כתובה בקובץ \u200e.env\u200e בשורה ADMIN_PASSWORD.',
+
+  'cal.today': 'היום',
+  'cal.prev': 'הקודם',
+  'cal.next': 'הבא',
+  'cal.day': 'יום',
+  'cal.week': 'שבוע',
+  'cal.month': 'חודש',
+  'cal.viewLabel': 'תצוגה',
+  'cal.new': 'תור חדש',
+  'cal.hint': 'לחיצה על זמן פנוי קובעת בו תור',
+  'cal.hintMonth': 'לחיצה על יום פותחת אותו',
+  'cal.dayOff': 'יום חופש',
+  'cal.closed': 'סגור',
+  'cal.more': 'עוד {n}',
+  'cal.past': 'הזמן הזה כבר עבר',
+  'cal.noTherapists': 'עוד אין אנשי צוות. הוסיפו מטפל או מטפלת כדי לראות את היומן.',
+  'cal.addTherapist': 'הוספת מטפל/ת',
+  'cal.limit': 'מוצגים 1000 התורים הראשונים',
+  'cal.count': ({ n }) => (n === 0 ? 'אין תורים' : n === 1 ? 'תור אחד' : `${n} תורים`),
+
+  'status.confirmed': 'מאושר',
+  'status.cancelled': 'בוטל',
+  'status.past': 'עבר',
+  'status.upcoming': 'עתידי',
+
+  'appt.title': 'תור',
+  'appt.status': 'מצב',
+  'appt.when': 'מתי',
+  'appt.therapist': 'מטפל/ת',
+  'appt.customer': 'לקוח/ה',
+  'appt.noName': 'ללא שם',
+  'appt.price': 'מחיר',
+  'appt.reminders': 'תזכורות',
+  'appt.reminderDay': 'יום לפני',
+  'appt.reminderHour': 'שעה לפני',
+  'appt.sent': 'נשלחה',
+  'appt.notYet': 'עוד לא',
+  'appt.whatsapp': 'וואטסאפ',
+  'appt.customerCard': 'כרטיס לקוח',
+  'appt.notes': 'הערות פנימיות',
+  'appt.notesHint': 'רק הצוות רואה את ההערות',
+  'appt.notesPlaceholder': 'למשל: רגישות בגב התחתון',
+  'appt.notesSaved': 'ההערות נשמרו',
+  'appt.move': 'שינוי מועד',
+  'appt.moveTitle': 'מועד חדש אצל {therapist}',
+  'appt.moveNone': 'אין זמן פנוי אצל {therapist} בתאריך הזה. נסו תאריך אחר.',
+  'appt.moveTo': 'המועד החדש: {date} בשעה {time}',
+  'appt.moveConfirm': 'אישור המועד החדש',
+  'appt.moved': 'המועד עודכן',
+  'appt.cancel': 'ביטול התור',
+  'appt.cancelTitle': 'לבטל את התור?',
+  'appt.cancelNotice': 'לא נשלחת ללקוח/ה הודעה אוטומטית. אחרי הביטול אפשר לשלוח הודעה בוואטסאפ.',
+  'appt.cancelConfirm': 'כן, לבטל',
+  'appt.keep': 'לא, להשאיר',
+  'appt.cancelled': 'התור בוטל',
+  'appt.tellCancelled': 'כדאי לעדכן את הלקוח/ה שהתור בוטל.',
+  'appt.tellMoved': 'כדאי לעדכן את הלקוח/ה על המועד החדש.',
+  'appt.tellButton': 'שליחת הודעה בוואטסאפ',
+
+  'wa.cancelled': 'שלום{name}, התור שלך ל{treatment} ב{date} בשעה {time} בוטל. אפשר לכתוב לנו כאן כדי לקבוע מועד חדש.',
+  'wa.moved': 'שלום{name}, התור שלך ל{treatment} עבר ל{date} בשעה {time}. נתראה!',
+  'summary.appt': '{treatment} אצל {therapist}, {date} בשעה {time}',
+
+  'book.title': 'תור חדש',
+  'book.phone': 'טלפון',
+  'book.phoneHint': 'מספר הוואטסאפ של הלקוח/ה',
+  'book.phoneInvalid': 'זה לא נראה כמו מספר טלפון. לדוגמה: 054-338-1998',
+  'book.newCustomer': 'לקוח/ה חדש/ה',
+  'book.known': 'לקוח/ה קיים/ת: {name} · {count}',
+  'book.name': 'שם',
+  'book.treatment': 'טיפול',
+  'book.date': 'תאריך',
+  'book.therapist': 'מטפל/ת',
+  'book.anyone': 'כל הצוות',
+  'book.freeTimes': 'זמנים פנויים',
+  'book.noSlots': 'אין זמנים פנויים בתאריך הזה.',
+  'book.nextDay': 'היום הבא',
+  'book.pickDate': 'בחרו תאריך מהיום והלאה',
+  'book.pickTime': 'בחרו זמן פנוי',
+  'book.wantedTaken': 'השעה {time} לא פנויה. בחרו זמן אחר.',
+  'book.notes': 'הערות',
+  'book.submit': 'קביעת התור',
+  'book.done': 'התור נקבע: {who}, {date} בשעה {time}',
+  'book.noTreatments': 'עוד אין טיפולים. הוסיפו טיפול כדי לקבוע תורים.',
+  'book.noTherapists': 'אין מטפלים פעילים. הוסיפו מטפל/ת כדי לקבוע תורים.',
+  'book.goTreatments': 'לטיפולים',
+  'book.goTeam': 'לצוות',
+
+  'list.title': 'תורים',
+  'list.today': 'היום',
+  'list.next7': '7 הימים הבאים',
+  'list.next30': '30 הימים הבאים',
+  'list.past30': '30 הימים האחרונים',
+  'list.from': 'מתאריך',
+  'list.to': 'עד תאריך',
+  'list.status': 'מצב',
+  'list.allStatuses': 'הכול',
+  'list.therapist': 'מטפל/ת',
+  'list.everyone': 'כל הצוות',
+  'list.searchLabel': 'חיפוש',
+  'list.search': 'שם, טלפון או טיפול',
+  'list.summary': '{count} · {money} מתורים מאושרים',
+  'list.empty': 'אין תורים בטווח הזה',
+  'list.limit': 'מוצגים 1000 התורים הראשונים. צמצמו את טווח התאריכים.',
+
+  'cust.title': 'לקוחות',
+  'cust.search': 'חיפוש לפי שם או טלפון',
+  'cust.empty': 'עוד אין לקוחות. לקוחות מופיעים כאן אחרי ההודעה הראשונה בוואטסאפ או התור הראשון.',
+  'cust.noMatch': 'לא נמצאו לקוחות',
+  'cust.limit': 'מוצגים 200 הראשונים. חפשו כדי לצמצם.',
+  'cust.name': 'שם',
+  'cust.phone': 'טלפון',
+  'cust.language': 'שפה',
+  'cust.appointments': 'תורים',
+  'cust.reminders': 'תזכורות',
+  'cust.remindersOn': 'פעילות',
+  'cust.remindersOff': 'כבויות',
+  'cust.card': 'כרטיס לקוח',
+  'cust.nameSaved': 'השם נשמר',
+  'cust.sendReminders': 'שליחת תזכורות בוואטסאפ',
+  'cust.remindersHint': 'כשהאפשרות כבויה, לא נשלחות תזכורות לפני התורים. הבוט עדיין עונה להודעות.',
+  'cust.remindersOnSaved': 'התזכורות הופעלו',
+  'cust.remindersOffSaved': 'התזכורות כובו',
+  'cust.history': 'היסטוריית תורים',
+  'cust.noHistory': 'עוד אין תורים',
+  'cust.book': 'קביעת תור',
+
+  'team.title': 'צוות',
+  'team.intro': 'הזמנים הפנויים, בבוט וביומן, מחושבים לפי ימי העבודה והשעות של כל אחד ואחת.',
+  'team.add': 'הוספת מטפל/ת',
+  'team.edit': 'עריכת פרטים',
+  'team.empty': 'עוד אין אנשי צוות',
+  'team.inactive': 'לא ביומן',
+  'team.name': 'שם',
+  'team.nameHint': 'לקוחות מבקשים מטפל/ת לפי השם, לכן כל שם צריך להיות שונה',
+  'team.phone': 'טלפון',
+  'team.email': 'אימייל',
+  'team.days': 'ימי עבודה',
+  'team.start': 'משעה',
+  'team.end': 'עד שעה',
+  'team.needName': 'צריך שם',
+  'team.nameTaken': 'כבר יש בצוות מישהו בשם הזה',
+  'team.needDay': 'בחרו לפחות יום עבודה אחד',
+  'team.badHours': 'שעת הסיום צריכה להיות אחרי שעת ההתחלה',
+  'team.badEmail': 'כתובת האימייל לא תקינה',
+  'team.added': '{name} נוסף/ה לצוות',
+  'team.deactivate': 'הוצאה מהיומן',
+  'team.deactivateTitle': 'להוציא את {name} מהיומן?',
+  'team.deactivateText': 'הבוט יפסיק להציע ללקוחות תורים אצל {name}. תורים קודמים נשמרים, ואפשר להחזיר לפעילות בכל זמן.',
+  'team.deactivated': '{name} הוצא/ה מהיומן',
+  'team.reactivated': '{name} חזר/ה לפעילות',
+  'team.stillBookedTitle': 'יש עוד תורים קבועים',
+  'team.stillBooked': 'עדיין קבועים אצל {name}: {count}. הם נשארים ביומן כמו שהם, ואפשר לבטל אותם אם צריך.',
+  'team.showThem': 'הצגת התורים',
+
+  'treat.title': 'טיפולים',
+  'treat.intro': 'הבוט מציע ללקוחות את הטיפולים הפעילים שכאן, באורך ובמחיר שכתובים.',
+  'treat.add': 'הוספת טיפול',
+  'treat.edit': 'עריכת טיפול',
+  'treat.empty': 'עוד אין טיפולים',
+  'treat.inactive': 'לא מוצע',
+  'treat.name': 'שם הטיפול',
+  'treat.nameHint': 'השם שהבוט מציג ללקוחות',
+  'treat.duration': 'משך (דקות)',
+  'treat.price': 'מחיר (₪)',
+  'treat.description': 'תיאור',
+  'treat.needName': 'צריך שם לטיפול',
+  'treat.nameTaken': 'כבר יש טיפול בשם הזה',
+  'treat.badDuration': 'משך הטיפול צריך להיות בין 5 ל-600 דקות',
+  'treat.badPrice': 'המחיר צריך להיות מספר שלם, 0 או יותר',
+  'treat.added': '{name} נוסף',
+  'treat.deactivate': 'הפסקת הצעה',
+  'treat.deactivateTitle': 'להפסיק להציע את {name}?',
+  'treat.deactivateText': 'הבוט יפסיק להציע את הטיפול. תורים שכבר נקבעו לא משתנים, ואפשר להחזיר אותו בכל זמן.',
+  'treat.deactivated': '{name} כבר לא מוצע',
+  'treat.reactivated': '{name} מוצע שוב',
+
+  'stats.title': 'נתונים',
+  'stats.thisMonth': 'החודש',
+  'stats.lastMonth': 'החודש שעבר',
+  'stats.last30': '30 יום אחרונים',
+  'stats.next30': '30 יום קדימה',
+  'stats.thisYear': 'השנה',
+  'stats.badRange': 'תאריך הסיום לפני תאריך ההתחלה',
+  'stats.tooLong': 'אפשר להציג עד שנה בכל פעם',
+  'stats.appointments': 'תורים',
+  'stats.revenue': 'הכנסות',
+  'stats.cancelled': 'ביטולים',
+  'stats.rate': 'שיעור ביטולים',
+  'stats.perDay': 'לפי יום',
+  'stats.perWeek': 'לפי שבוע',
+  'stats.weekOf': 'השבוע של {date}',
+  'stats.byTreatment': 'לפי טיפול',
+  'stats.byTherapist': 'לפי מטפל/ת',
+  'stats.empty': 'אין תורים בטווח הזה',
+  'stats.none': 'אין נתונים',
+  'stats.note': 'ההכנסות מחושבות מתורים מאושרים, לפי המחיר הנוכחי של כל טיפול.',
+
+  'set.title': 'הגדרות',
+  'set.business': 'פרטי העסק',
+  'set.name': 'שם העסק',
+  'set.phone': 'טלפון',
+  'set.email': 'אימייל',
+  'set.address': 'כתובת',
+  'set.open': 'שעת פתיחה',
+  'set.close': 'שעת סגירה',
+  'set.hoursHint': 'השעות האלה קובעות את טווח השעות ביומן. הזמנים הפנויים מחושבים לפי שעות העבודה של הצוות.',
+  'set.needName': 'צריך שם לעסק',
+  'set.needPhone': 'צריך מספר טלפון',
+  'set.saved': 'הפרטים נשמרו',
+  'set.language': 'שפה',
+  'set.system': 'מערכת',
+  'set.timezone': 'אזור זמן',
+  'set.timezoneHint': 'כל השעות בלוח מוצגות לפי אזור הזמן של המרפאה. אפשר לשנות אותו בקובץ \u200e.env\u200e בשורה TIMEZONE.',
+  'set.apiDocs': 'תיעוד ה-API',
+};
+
+const en = {
+  'app.name': 'Appointments',
+  'nav.label': 'Main',
+  'nav.calendar': 'Calendar',
+  'nav.calendarShort': 'Calendar',
+  'nav.appointments': 'Appointments',
+  'nav.appointmentsShort': 'Bookings',
+  'nav.customers': 'Customers',
+  'nav.customersShort': 'Clients',
+  'nav.team': 'Team',
+  'nav.teamShort': 'Team',
+  'nav.treatments': 'Treatments',
+  'nav.treatmentsShort': 'Services',
+  'nav.stats': 'Statistics',
+  'nav.statsShort': 'Stats',
+  'nav.settings': 'Settings',
+  'nav.settingsShort': 'Settings',
+  'nav.signOut': 'Sign out',
+  'lang.other': 'עברית',
+  'lang.he': 'Hebrew',
+  'lang.en': 'English',
+  'lang.ru': 'Russian',
+  'lang.unknown': 'Unknown',
+
+  'common.loading': 'Loading…',
+  'common.close': 'Close',
+  'common.cancel': 'Cancel',
+  'common.ok': 'OK',
+  'common.save': 'Save',
+  'common.saved': 'Changes saved',
+  'common.retry': 'Try again',
+  'common.edit': 'Edit',
+  'common.optional': 'Optional',
+  'common.minutes': '{n} min',
+  'common.inactive': 'inactive',
+  'common.showInactive': 'Show inactive ({n})',
+  'common.reactivate': 'Bring back',
+
+  'err.network': "Can't reach the server. Check it is running, then try again.",
+  'err.timeout': 'The server took too long to answer. Try again.',
+  'err.generic': 'Something went wrong. Try again.',
+  'err.server': 'The server hit an error. The details are in its log.',
+  'err.notFound': 'Not found',
+  'err.invalid': 'Some details are not valid',
+
+  'login.title': 'Sign in',
+  'login.subtitle': "Manage the clinic's appointments",
+  'login.password': 'Password',
+  'login.submit': 'Sign in',
+  'login.wrong': "That password isn't right",
+  'login.tooMany': 'Too many attempts. Try again in {minutes} minutes.',
+  'login.expired': 'Your session ended. Please sign in again.',
+  'login.notConfigured': 'No password is set on the server yet. On the computer running the server, run this, then restart the server:',
+  'login.forgot': 'Forgot it? The password is in the .env file, on the ADMIN_PASSWORD line.',
+
+  'cal.today': 'Today',
+  'cal.prev': 'Previous',
+  'cal.next': 'Next',
+  'cal.day': 'Day',
+  'cal.week': 'Week',
+  'cal.month': 'Month',
+  'cal.viewLabel': 'View',
+  'cal.new': 'New appointment',
+  'cal.hint': 'Click free time to book it',
+  'cal.hintMonth': 'Click a day to open it',
+  'cal.dayOff': 'Day off',
+  'cal.closed': 'Closed',
+  'cal.more': '+{n} more',
+  'cal.past': 'That time has passed',
+  'cal.noTherapists': 'No therapists yet. Add one to see the calendar.',
+  'cal.addTherapist': 'Add a therapist',
+  'cal.limit': 'Showing the first 1000 appointments',
+  'cal.count': ({ n }) => (n === 0 ? 'no appointments' : n === 1 ? '1 appointment' : `${n} appointments`),
+
+  'status.confirmed': 'Confirmed',
+  'status.cancelled': 'Cancelled',
+  'status.past': 'Past',
+  'status.upcoming': 'Upcoming',
+
+  'appt.title': 'Appointment',
+  'appt.status': 'Status',
+  'appt.when': 'When',
+  'appt.therapist': 'Therapist',
+  'appt.customer': 'Customer',
+  'appt.noName': 'No name',
+  'appt.price': 'Price',
+  'appt.reminders': 'Reminders',
+  'appt.reminderDay': 'Day before',
+  'appt.reminderHour': 'Hour before',
+  'appt.sent': 'sent',
+  'appt.notYet': 'not yet',
+  'appt.whatsapp': 'WhatsApp',
+  'appt.customerCard': 'Customer card',
+  'appt.notes': 'Private notes',
+  'appt.notesHint': 'Only the clinic sees these',
+  'appt.notesPlaceholder': 'e.g. sensitive lower back',
+  'appt.notesSaved': 'Notes saved',
+  'appt.move': 'Reschedule',
+  'appt.moveTitle': 'New time with {therapist}',
+  'appt.moveNone': '{therapist} has no free time on this date. Try another.',
+  'appt.moveTo': 'New time: {date} at {time}',
+  'appt.moveConfirm': 'Confirm new time',
+  'appt.moved': 'Appointment moved',
+  'appt.cancel': 'Cancel appointment',
+  'appt.cancelTitle': 'Cancel this appointment?',
+  'appt.cancelNotice': "The customer isn't told automatically. After cancelling you can message them on WhatsApp.",
+  'appt.cancelConfirm': 'Yes, cancel it',
+  'appt.keep': 'No, keep it',
+  'appt.cancelled': 'Appointment cancelled',
+  'appt.tellCancelled': 'Let the customer know it is cancelled.',
+  'appt.tellMoved': 'Let the customer know the new time.',
+  'appt.tellButton': 'Message on WhatsApp',
+
+  'wa.cancelled': 'Hi{name}, your {treatment} appointment on {date} at {time} has been cancelled. Write to us here to book a new time.',
+  'wa.moved': 'Hi{name}, your {treatment} appointment has moved to {date} at {time}. See you then!',
+  'summary.appt': '{treatment} with {therapist}, {date} at {time}',
+
+  'book.title': 'New appointment',
+  'book.phone': 'Phone',
+  'book.phoneHint': "The customer's WhatsApp number",
+  'book.phoneInvalid': "That doesn't look like a phone number. For example: 054-338-1998",
+  'book.newCustomer': 'New customer',
+  'book.known': 'Returning customer: {name} · {count}',
+  'book.name': 'Name',
+  'book.treatment': 'Treatment',
+  'book.date': 'Date',
+  'book.therapist': 'Therapist',
+  'book.anyone': 'Anyone',
+  'book.freeTimes': 'Free times',
+  'book.noSlots': 'No free times on this date.',
+  'book.nextDay': 'Next day',
+  'book.pickDate': 'Choose today or a later date',
+  'book.pickTime': 'Choose a free time',
+  'book.wantedTaken': "{time} isn't free. Choose another time.",
+  'book.notes': 'Notes',
+  'book.submit': 'Book',
+  'book.done': 'Booked: {who}, {date} at {time}',
+  'book.noTreatments': 'No treatments yet. Add one to start booking.',
+  'book.noTherapists': 'No active therapists. Add one to start booking.',
+  'book.goTreatments': 'Go to treatments',
+  'book.goTeam': 'Go to the team',
+
+  'list.title': 'Appointments',
+  'list.today': 'Today',
+  'list.next7': 'Next 7 days',
+  'list.next30': 'Next 30 days',
+  'list.past30': 'Last 30 days',
+  'list.from': 'From',
+  'list.to': 'To',
+  'list.status': 'Status',
+  'list.allStatuses': 'All',
+  'list.therapist': 'Therapist',
+  'list.everyone': 'Everyone',
+  'list.searchLabel': 'Search',
+  'list.search': 'Name, phone or treatment',
+  'list.summary': '{count} · {money} from confirmed bookings',
+  'list.empty': 'No appointments in this range',
+  'list.limit': 'Showing the first 1000. Narrow the dates to see the rest.',
+
+  'cust.title': 'Customers',
+  'cust.search': 'Search by name or phone',
+  'cust.empty': 'No customers yet. They appear here after their first WhatsApp message or booking.',
+  'cust.noMatch': 'No customers found',
+  'cust.limit': 'Showing the first 200. Search to narrow it down.',
+  'cust.name': 'Name',
+  'cust.phone': 'Phone',
+  'cust.language': 'Language',
+  'cust.appointments': 'Appointments',
+  'cust.reminders': 'Reminders',
+  'cust.remindersOn': 'On',
+  'cust.remindersOff': 'Off',
+  'cust.card': 'Customer',
+  'cust.nameSaved': 'Name saved',
+  'cust.sendReminders': 'Send WhatsApp reminders',
+  'cust.remindersHint': 'When off, no reminders go out before their appointments. The bot still answers their messages.',
+  'cust.remindersOnSaved': 'Reminders on',
+  'cust.remindersOffSaved': 'Reminders off',
+  'cust.history': 'Appointment history',
+  'cust.noHistory': 'No appointments yet',
+  'cust.book': 'Book',
+
+  'team.title': 'Team',
+  'team.intro': "Free times, in the bot and on the calendar, come from each person's working days and hours.",
+  'team.add': 'Add therapist',
+  'team.edit': 'Edit details',
+  'team.empty': 'No therapists yet',
+  'team.inactive': 'Off the schedule',
+  'team.name': 'Name',
+  'team.nameHint': 'Customers ask for therapists by name, so each name must be different',
+  'team.phone': 'Phone',
+  'team.email': 'Email',
+  'team.days': 'Working days',
+  'team.start': 'From',
+  'team.end': 'Until',
+  'team.needName': 'A name is needed',
+  'team.nameTaken': 'Someone on the team already has that name',
+  'team.needDay': 'Choose at least one working day',
+  'team.badHours': 'The end time must be after the start time',
+  'team.badEmail': "That email address isn't valid",
+  'team.added': '{name} added to the team',
+  'team.deactivate': 'Take off schedule',
+  'team.deactivateTitle': 'Take {name} off the schedule?',
+  'team.deactivateText': 'The bot stops offering appointments with {name}. Past appointments are kept, and you can bring {name} back any time.',
+  'team.deactivated': '{name} is off the schedule',
+  'team.reactivated': '{name} is back on the schedule',
+  'team.stillBookedTitle': 'Appointments still booked',
+  'team.stillBooked': 'Still booked with {name}: {count}. They stay on the calendar as they are; cancel them if needed.',
+  'team.showThem': 'Show them',
+
+  'treat.title': 'Treatments',
+  'treat.intro': 'The bot offers customers the active treatments here, at the length and price shown.',
+  'treat.add': 'Add treatment',
+  'treat.edit': 'Edit treatment',
+  'treat.empty': 'No treatments yet',
+  'treat.inactive': 'Not offered',
+  'treat.name': 'Name',
+  'treat.nameHint': 'The name the bot shows customers',
+  'treat.duration': 'Length (minutes)',
+  'treat.price': 'Price (₪)',
+  'treat.description': 'Description',
+  'treat.needName': 'The treatment needs a name',
+  'treat.nameTaken': 'There is already a treatment with that name',
+  'treat.badDuration': 'The length must be between 5 and 600 minutes',
+  'treat.badPrice': 'The price must be a whole number, 0 or more',
+  'treat.added': '{name} added',
+  'treat.deactivate': 'Stop offering',
+  'treat.deactivateTitle': 'Stop offering {name}?',
+  'treat.deactivateText': "The bot stops offering it. Appointments already booked don't change, and you can bring it back any time.",
+  'treat.deactivated': '{name} is no longer offered',
+  'treat.reactivated': '{name} is offered again',
+
+  'stats.title': 'Statistics',
+  'stats.thisMonth': 'This month',
+  'stats.lastMonth': 'Last month',
+  'stats.last30': 'Last 30 days',
+  'stats.next30': 'Next 30 days',
+  'stats.thisYear': 'This year',
+  'stats.badRange': 'The end date is before the start date',
+  'stats.tooLong': 'Up to a year at a time',
+  'stats.appointments': 'Appointments',
+  'stats.revenue': 'Revenue',
+  'stats.cancelled': 'Cancellations',
+  'stats.rate': 'Cancellation rate',
+  'stats.perDay': 'Per day',
+  'stats.perWeek': 'Per week',
+  'stats.weekOf': 'Week of {date}',
+  'stats.byTreatment': 'By treatment',
+  'stats.byTherapist': 'By therapist',
+  'stats.empty': 'No appointments in this range',
+  'stats.none': 'Nothing yet',
+  'stats.note': "Revenue counts confirmed appointments at each treatment's current price.",
+
+  'set.title': 'Settings',
+  'set.business': 'Business details',
+  'set.name': 'Business name',
+  'set.phone': 'Phone',
+  'set.email': 'Email',
+  'set.address': 'Address',
+  'set.open': 'Opens at',
+  'set.close': 'Closes at',
+  'set.hoursHint': "These set the hours the calendar shows. Free times come from the team's own working hours.",
+  'set.needName': 'The business needs a name',
+  'set.needPhone': 'A phone number is needed',
+  'set.saved': 'Details saved',
+  'set.language': 'Language',
+  'set.system': 'System',
+  'set.timezone': 'Timezone',
+  'set.timezoneHint': "Every time on the dashboard is the clinic's. Change it in the .env file, on the TIMEZONE line.",
+  'set.apiDocs': 'API documentation',
+};
+
+// What the server says, in Hebrew. Anything not listed is shown as sent.
+const SERVER_HE = {
+  'That therapist is already booked then': 'המטפל/ת כבר תפוס/ה בזמן הזה',
+  'That time has already passed': 'הזמן הזה כבר עבר',
+  'Could not read the date or time': 'לא הצלחנו לקרוא את התאריך או השעה',
+  'No such treatment': 'הטיפול לא נמצא',
+  'No active therapist to assign': 'אין מטפל/ת פעיל/ה לשבץ',
+  'No such customer': 'הלקוח/ה לא נמצא/ה',
+  'No matching appointment': 'התור לא נמצא',
+  'No such appointment': 'התור לא נמצא',
+  'Appointment has no customer': 'לתור הזה אין לקוח/ה',
+  'Could not complete the request': 'הפעולה לא הושלמה',
+  'Range is limited to a year': 'אפשר להציג עד שנה בכל פעם',
+  'to_date is before from_date': 'תאריך הסיום לפני תאריך ההתחלה',
+  'Therapist not found': 'המטפל/ת לא נמצא/ה',
+  'Treatment not found': 'הטיפול לא נמצא',
+  'Incorrect password': 'הסיסמה לא נכונה',
+  'Too many wrong passwords. Try again later.': 'יותר מדי ניסיונות שגויים. נסו שוב מאוחר יותר.',
+  'No business matches BUSINESS_ID; check .env against the data': 'העסק לא נמצא. בדקו את BUSINESS_ID בקובץ .env',
+  'JWT_SECRET is not configured; the API is closed': 'הכניסה לא הוגדרה בשרת',
+  'Invalid or expired token': 'פג הזמן של החיבור. צריך להיכנס שוב.',
+  'Not authenticated': 'צריך להיכנס שוב',
+  'Expected a phone number, e.g. 054-338-1998 or 972543381998': 'זה לא נראה כמו מספר טלפון. לדוגמה: 054-338-1998',
+};
+
+const STRINGS = { he, en };
+const LOCALES = { he: 'he-IL', en: 'en-GB' };
+const STORAGE_KEY = 'bb.lang';
+
+function stored() {
+  try {
+    const value = localStorage.getItem(STORAGE_KEY);
+    return Object.hasOwn(STRINGS, value || '') ? value : null;
+  } catch {
+    return null;
+  }
+}
+
+let current = stored() || 'he';
+
+export function getLang() {
+  return current;
+}
+
+export function setLang(lang) {
+  if (!Object.hasOwn(STRINGS, lang)) return;
+  current = lang;
+  try {
+    localStorage.setItem(STORAGE_KEY, lang);
+  } catch {
+    // Storage refused: the choice lasts until the page is closed.
+  }
+  applyLang();
+}
+
+/** Point the page at the current language: its direction follows. */
+export function applyLang() {
+  document.documentElement.lang = current;
+  document.documentElement.dir = current === 'he' ? 'rtl' : 'ltr';
+}
+
+export function t(key, params = {}) {
+  let entry = STRINGS[current][key];
+  if (entry === undefined) {
+    console.warn(`No ${current} text for ${key}`);
+    entry = en[key] ?? key;
+  }
+  const text = typeof entry === 'function' ? entry(params) : entry;
+  return text.replace(/\{(\w+)\}/g, (match, name) => (name in params ? String(params[name]) : match));
+}
+
+/** A message from the server, in the dashboard's language where it is known. */
+export function serverText(message) {
+  const text = String(message || '').replace(/^Value error, /, '');
+  return current === 'he' ? SERVER_HE[text] || text : text;
+}
+
+const formats = new Map();
+
+function dateFormat(options) {
+  const key = `d|${current}|${JSON.stringify(options)}`;
+  // Dates arrive as the clinic's calendar dates and are shown as given, so UTC.
+  if (!formats.has(key)) formats.set(key, new Intl.DateTimeFormat(LOCALES[current], { timeZone: 'UTC', ...options }));
+  return formats.get(key);
+}
+
+function numberFormat(options) {
+  const key = `n|${current}|${JSON.stringify(options)}`;
+  if (!formats.has(key)) formats.set(key, new Intl.NumberFormat(LOCALES[current], options));
+  return formats.get(key);
+}
+
+export const fmt = {
+  /** "Thursday, 8 October", with the year when it is not this one. */
+  dateLong(iso) {
+    const options = { weekday: 'long', day: 'numeric', month: 'long' };
+    if (iso.slice(0, 4) !== String(new Date().getFullYear())) options.year = 'numeric';
+    return dateFormat(options).format(toUTC(iso));
+  },
+  dateShort: (iso) => dateFormat({ weekday: 'short', day: 'numeric', month: 'short' }).format(toUTC(iso)),
+  dayMonth: (iso) => dateFormat({ day: 'numeric', month: 'short' }).format(toUTC(iso)),
+  monthYear: (iso) => dateFormat({ month: 'long', year: 'numeric' }).format(toUTC(iso)),
+  weekday: (iso, style = 'short') => dateFormat({ weekday: style }).format(toUTC(iso)),
+  dayNumber: (iso) => String(Number(iso.slice(8, 10))),
+
+  dateRange(from, to) {
+    const format = dateFormat({ day: 'numeric', month: 'long', year: 'numeric' });
+    if (typeof format.formatRange === 'function') return format.formatRange(toUTC(from), toUTC(to));
+    return `${format.format(toUTC(from))} – ${format.format(toUTC(to))}`;
+  },
+
+  /** A weekday stored in English ('Sunday'), in the dashboard's language. */
+  dayName(english, style = 'long') {
+    const index = DAY_NAMES.indexOf(english);
+    // 1 January 2023 was a Sunday.
+    return index < 0 ? english : dateFormat({ weekday: style }).format(new Date(Date.UTC(2023, 0, 1 + index)));
+  },
+
+  /** A weekday as short as it can be and still be clear: א׳ in Hebrew, Sun in English. */
+  dayChip(english) {
+    return fmt.dayName(english, current === 'he' ? 'narrow' : 'short');
+  },
+
+  money: (amount) => numberFormat({ style: 'currency', currency: 'ILS', maximumFractionDigits: 0 }).format(amount || 0),
+  number: (n) => numberFormat({}).format(n || 0),
+  percent: (fraction) => numberFormat({ style: 'percent', maximumFractionDigits: 1 }).format(fraction || 0),
+
+  /** 972543381998 as 054-338-1998; numbers from elsewhere keep their country code. */
+  phone(digits) {
+    const d = String(digits || '');
+    if (/^972\d{8,9}$/.test(d)) {
+      const local = `0${d.slice(3)}`;
+      return local.length === 10
+        ? `${local.slice(0, 3)}-${local.slice(3, 6)}-${local.slice(6)}`
+        : `${local.slice(0, 2)}-${local.slice(2, 5)}-${local.slice(5)}`;
+    }
+    return d ? `+${d}` : '';
+  },
+
+  language(code) {
+    return t({ he: 'lang.he', en: 'lang.en', ru: 'lang.ru' }[code] || 'lang.unknown');
+  },
+};

@@ -29,6 +29,9 @@ def serialize(therapist: Therapist) -> dict:
         "working_hours_start": therapist.working_hours_start,
         "working_hours_end": therapist.working_hours_end,
         "is_active": bool(therapist.is_active),
+        # The dashboard colours therapists in the order they joined, so
+        # someone new never changes the colour everyone else already has.
+        "created_at": therapist.created_at.isoformat() if therapist.created_at else None,
     }
 
 
@@ -62,6 +65,8 @@ async def create_therapist(body: TherapistIn):
         )
         session.add(therapist)
         await session.commit()
+        # The database sets created_at; read it back before serializing.
+        await session.refresh(therapist)
         logger.info(f"Created therapist {therapist.name}")
         return serialize(therapist)
 

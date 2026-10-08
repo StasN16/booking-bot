@@ -151,6 +151,7 @@ class TherapistOut(BaseModel):
     working_hours_start: str | None = None
     working_hours_end: str | None = None
     is_active: bool
+    created_at: str | None = None
 
 
 # --- appointments ----------------------------------------------------------
