@@ -32,6 +32,7 @@ NUMBER_TAKEN = "Another clinic already uses that WhatsApp number"
 
 
 def serialize_clinic(business: Business, logins: dict, upcoming: dict) -> dict:
+    is_home = str(business.id) == settings.BUSINESS_ID
     return {
         "id": str(business.id),
         "name": business.name,
@@ -42,8 +43,9 @@ def serialize_clinic(business: Business, logins: dict, upcoming: dict) -> dict:
         "working_hours_end": business.working_hours_end,
         "whatsapp_phone_id": business.whatsapp_phone_id,
         "has_own_token": bool(business.whatsapp_token),
+        "whatsapp_from_env": is_home and not business.whatsapp_phone_id and bool(settings.WHATSAPP_PHONE_ID),
         "is_active": bool(business.is_active),
-        "is_home": str(business.id) == settings.BUSINESS_ID,
+        "is_home": is_home,
         "logins": logins.get(business.id, 0),
         "upcoming_appointments": upcoming.get(business.id, 0),
     }

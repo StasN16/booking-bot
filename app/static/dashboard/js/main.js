@@ -2,14 +2,19 @@
  * The dashboard: signing in, the frame around every page, and moving
  * between pages. Pages live in views/; each draws itself into the main area
  * and may return { refresh } to be redrawn with fresh data.
+ *
+ * Two kinds of people sign in. A clinic sees its own dashboard and nothing
+ * else. The owner of the service also gets the Clinics page, and can open
+ * any clinic's dashboard from it or from the switcher by the clinic's name.
  */
-import { api, clearToken, isSignedIn, tokenExpiry } from './api.js';
+import { api, clearToken, getClinic, isSignedIn, setClinic, tokenExpiry } from './api.js';
 import { applyLang, getLang, setLang, t } from './i18n.js';
-import { errorBox, h, icon, spinner } from './ui.js';
+import { errorBox, fill, h, icon, spinner, toast } from './ui.js';
 import { openAppointment } from './views/appointment.js';
 import appointments from './views/appointments.js';
 import { openBooking } from './views/booking.js';
 import calendar from './views/calendar.js';
+import clinics from './views/clinics.js';
 import customers, { openCustomer } from './views/customers.js';
 import { renderLogin } from './views/login.js';
 import settings from './views/settings.js';
@@ -18,6 +23,7 @@ import team from './views/team.js';
 import treatments from './views/treatments.js';
 
 const ROUTES = [
+  { path: 'clinics', icon: 'building', label: 'nav.clinics', short: 'nav.clinicsShort', view: clinics, ownerOnly: true },
   { path: 'calendar', icon: 'calendar', label: 'nav.calendar', short: 'nav.calendarShort', view: calendar },
   { path: 'appointments', icon: 'list', label: 'nav.appointments', short: 'nav.appointmentsShort', view: appointments },
   { path: 'customers', icon: 'users', label: 'nav.customers', short: 'nav.customersShort', view: customers },
@@ -33,14 +39,21 @@ const REFRESH_MS = 60000;
 const PALETTE = ['#0d9488', '#7c3aed', '#d97706', '#e11d48', '#0284c7', '#65a30d', '#c026d3', '#ea580c'];
 
 const root = document.getElementById('app');
-let main = null; // the area pages draw into, while signed in
+let signedIn = false;
+let main = null; // the area pages draw into, once the frame is up
 let page = null; // what the current page returned
 let expiryTimer = null;
 
 const ctx = {
+  me: null, // { role, email, name, business_id }
+  clinics: [], // the owner's list; empty for a clinic login
   business: null,
   therapists: [],
   treatments: [],
+
+  get isOwner() {
+    return Boolean(this.me && this.me.role === 'owner');
+  },
 
   get tz() {
     return (this.business && this.business.timezone) || 'Asia/Jerusalem';
@@ -58,10 +71,50 @@ const ctx = {
     this.setBusiness(business);
   },
 
+  /** The owner's list of clinics, forgetting a chosen one that has gone. */
+  async loadClinics() {
+    this.clinics = await api('/platform/clinics');
+    const chosen = getClinic();
+    if (chosen && !this.clinics.some((clinic) => clinic.id === chosen)) setClinic(null);
+  },
+
   setBusiness(business) {
     this.business = business;
     for (const el of root.querySelectorAll('.brand-name')) el.textContent = business.name;
+    for (const select of root.querySelectorAll('.clinic-switch')) select.value = business.id;
     setTitle();
+  },
+
+  /** The owner opens another clinic's dashboard. */
+  async switchClinic(id) {
+    setClinic(id);
+    main.replaceChildren(spinner());
+    try {
+      await this.loadReference();
+    } catch (error) {
+      if (error.status !== 401) fill(main, errorBox(error, () => this.switchClinic(id)));
+      return;
+    }
+    frame();
+    if (parseHash().path === HOME) route();
+    else this.navigate(HOME);
+    toast(t('clinics.nowShowing', { name: this.business.name }), 'success');
+  },
+
+  /**
+   * The owner added or changed a clinic: reload the list and the switcher,
+   * and the clinic on screen too if it was the one changed.
+   */
+  async clinicsChanged(changedId) {
+    try {
+      await this.loadClinics();
+      if (changedId && this.business && changedId === this.business.id) await this.loadReference();
+    } catch (error) {
+      if (error.status !== 401) toast(error.message, 'error');
+      return;
+    }
+    frame();
+    route();
   },
 
   activeTherapists() {
@@ -108,7 +161,7 @@ const ctx = {
     if (main) {
       frame();
       route();
-    } else {
+    } else if (!signedIn) {
       showLogin();
     }
   },
@@ -147,28 +200,41 @@ function toggleLanguage() {
   ctx.setLanguage(getLang() === 'he' ? 'en' : 'he');
 }
 
-function showLogin({ expired = false } = {}) {
+function showLogin({ expired = false, message = '' } = {}) {
   if (page && page.unmount) page.unmount();
   page = null;
   main = null;
+  signedIn = false;
+  ctx.me = null;
+  ctx.clinics = [];
   clearTimeout(expiryTimer);
   closeDialogs();
   document.title = t('login.title');
-  renderLogin(root, { expired, onSignedIn: start, onLanguage: toggleLanguage });
+  renderLogin(root, { expired, message, onSignedIn: start, onLanguage: toggleLanguage });
 }
 
 async function start() {
-  frame();
+  signedIn = true;
+  main = null;
   scheduleSignOut();
-  main.replaceChildren(spinner());
+  fill(root, h('div', { class: 'boot' }, spinner()));
   try {
+    ctx.me = await api('/auth/me');
+    if (ctx.isOwner) await ctx.loadClinics();
     await ctx.loadReference();
   } catch (error) {
     // A rejected token has already brought the sign-in page back.
-    if (error.status !== 401 && main) main.replaceChildren(errorBox(error, start));
+    if (error.status !== 401 && signedIn) {
+      fill(root, h('div', { class: 'boot' }, errorBox(error, start)));
+    }
     return;
   }
+  frame();
   route();
+}
+
+function visibleRoutes() {
+  return ROUTES.filter((r) => !r.ownerOnly || ctx.isOwner);
 }
 
 /** The frame around every page: navigation, the clinic's name, language and sign-out. */
@@ -179,7 +245,17 @@ function frame() {
   const languageButton = () => h('button', { class: 'btn btn-ghost', type: 'button', onclick: toggleLanguage, lang: getLang() === 'he' ? 'en' : 'he' },
     icon('globe'), h('span', {}, t('lang.other')));
 
-  const nav = h('nav', { class: 'nav', 'aria-label': t('nav.label') }, ROUTES.map((r) => h('a', {
+  // The owner moves between clinics here; a clinic login has only its own.
+  let switcher = null;
+  if (ctx.isOwner && ctx.clinics.length > 1) {
+    const select = h('select', { class: 'clinic-switch', 'aria-label': t('clinic.switch') },
+      ctx.clinics.map((clinic) => h('option', { value: clinic.id }, clinic.name)));
+    select.value = ctx.business ? ctx.business.id : '';
+    select.addEventListener('change', () => ctx.switchClinic(select.value));
+    switcher = h('label', { class: 'clinic-switcher' }, h('span', { class: 'label' }, t('clinic.switch')), select);
+  }
+
+  const nav = h('nav', { class: 'nav', 'aria-label': t('nav.label') }, visibleRoutes().map((r) => h('a', {
     class: 'nav-item', href: `#/${r.path}`, dataset: { route: r.path },
   },
   icon(r.icon),
@@ -187,9 +263,10 @@ function frame() {
   h('span', { class: 'nav-short', 'aria-hidden': 'true' }, t(r.short)))));
 
   main = h('main', { class: 'main', id: 'main' });
-  root.replaceChildren(h('div', { class: 'app' },
+  fill(root, h('div', { class: 'app' },
     h('aside', { class: 'sidebar' },
       brand(),
+      switcher,
       nav,
       h('div', { class: 'sidebar-foot' },
         languageButton(),
@@ -202,7 +279,7 @@ function frame() {
 function route() {
   if (!main) return;
   const { path, params } = parseHash();
-  const entry = ROUTES.find((r) => r.path === path);
+  const entry = visibleRoutes().find((r) => r.path === path);
   if (!entry) {
     window.history.replaceState(null, '', hashFor(HOME));
     route();
@@ -244,7 +321,8 @@ function tick() {
 applyLang();
 window.addEventListener('hashchange', route);
 window.addEventListener('bb:signed-out', (event) => {
-  if (main) showLogin({ expired: Boolean(event.detail && event.detail.expired) });
+  const detail = event.detail || {};
+  if (signedIn) showLogin({ expired: Boolean(detail.expired), message: detail.message || '' });
 });
 document.addEventListener('visibilitychange', tick);
 setInterval(tick, REFRESH_MS);

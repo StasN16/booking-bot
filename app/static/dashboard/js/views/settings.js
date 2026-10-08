@@ -71,6 +71,7 @@ export default function settingsView(container, params, ctx) {
         h('p', { class: 'hint span-2' }, t('set.hoursHint')),
         h('div', { class: 'span-2' }, error)),
       h('div', { class: 'button-row end' }, submit)),
+    account(ctx),
     h('section', { class: 'card' },
       h('h2', { class: 'card-title' }, t('set.language')),
       h('div', { class: 'seg', role: 'group', 'aria-label': t('set.language') }, languages)),
@@ -82,4 +83,55 @@ export default function settingsView(container, params, ctx) {
       h('div', { class: 'button-row' },
         h('a', { class: 'btn', href: '/docs', target: '_blank', rel: 'noopener noreferrer' }, t('set.apiDocs')),
         h('button', { class: 'btn btn-danger-ghost', type: 'button', onclick: () => ctx.signOut() }, icon('logout'), h('span', {}, t('nav.signOut')))))));
+}
+
+
+/** Who is signed in; a clinic login can choose its own password here. */
+function account(ctx) {
+  if (ctx.isOwner) {
+    return h('section', { class: 'card' },
+      h('h2', { class: 'card-title' }, t('set.account')),
+      h('p', {}, t('set.owner')));
+  }
+
+  const current = h('input', { type: 'password', autocomplete: 'current-password', required: true });
+  const fresh = h('input', { type: 'password', autocomplete: 'new-password', required: true, minlength: 8 });
+  const again = h('input', { type: 'password', autocomplete: 'new-password', required: true });
+  const error = h('p', { class: 'form-error', role: 'alert' });
+  const formId = uid('form');
+  const submit = h('button', { class: 'btn btn-primary', type: 'submit', form: formId }, t('set.changePassword'));
+
+  async function change(event) {
+    event.preventDefault();
+    error.textContent = '';
+    const problem = !current.value ? t('set.needCurrent')
+      : fresh.value.length < 8 ? t('set.tooShort')
+        : fresh.value !== again.value ? t('set.mismatch')
+          : '';
+    if (problem) {
+      error.textContent = problem;
+      return;
+    }
+    await busy(submit, async () => {
+      try {
+        await api('/auth/password', { method: 'POST', body: { current_password: current.value, new_password: fresh.value } });
+        current.value = '';
+        fresh.value = '';
+        again.value = '';
+        toast(t('set.passwordChanged'), 'success');
+      } catch (err) {
+        error.textContent = err.message;
+      }
+    });
+  }
+
+  return h('section', { class: 'card' },
+    h('h2', { class: 'card-title' }, t('set.account')),
+    h('p', { class: 'muted' }, t('set.signedInAs'), ' ', ltr(ctx.me.email || '')),
+    h('form', { id: formId, class: 'form-grid', novalidate: true, onsubmit: change },
+      field(t('set.current'), current, { className: 'span-2' }),
+      field(t('set.new'), fresh, { hint: t('set.newHint') }),
+      field(t('set.again'), again),
+      h('div', { class: 'span-2' }, error)),
+    h('div', { class: 'button-row end' }, submit));
 }

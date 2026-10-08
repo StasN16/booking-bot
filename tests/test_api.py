@@ -546,6 +546,48 @@ class TestOwnerOnly:
         assert response.status_code == 403
 
 
+class TestClinicCard:
+    """What the owner's Clinics page is told about each clinic."""
+
+    HOME = "11111111-1111-1111-1111-111111111111"
+    OTHER = "22222222-2222-2222-2222-222222222222"
+
+    @pytest.fixture(autouse=True)
+    def env_number(self, monkeypatch):
+        monkeypatch.setattr(settings, "BUSINESS_ID", self.HOME)
+        monkeypatch.setattr(settings, "WHATSAPP_PHONE_ID", "1072796699244200")
+
+    def card(self, clinic_id, phone_id=None, token=None):
+        import uuid
+        from types import SimpleNamespace
+        from app.api.v1.platform import serialize_clinic
+        business = SimpleNamespace(
+            id=uuid.UUID(clinic_id), name="Clinic", phone="03-555-1234", email=None, address=None,
+            working_hours_start="09:00", working_hours_end="19:00",
+            whatsapp_phone_id=phone_id, whatsapp_token=token, is_active=True)
+        return serialize_clinic(business, logins={business.id: 2}, upcoming={})
+
+    def test_the_main_clinic_without_its_own_number_sends_from_the_env_one(self):
+        card = self.card(self.HOME)
+        assert card["is_home"] and card["whatsapp_from_env"]
+
+    def test_the_main_clinic_with_its_own_number_uses_that(self):
+        assert not self.card(self.HOME, phone_id="555000111")["whatsapp_from_env"]
+
+    def test_another_clinic_never_borrows_the_env_number(self):
+        card = self.card(self.OTHER)
+        assert not card["is_home"] and not card["whatsapp_from_env"]
+
+    def test_a_clinics_token_is_never_sent_back(self):
+        card = self.card(self.OTHER, phone_id="555000111", token="EAAG-secret")
+        assert card["has_own_token"] is True
+        assert "EAAG-secret" not in str(card)
+
+    def test_counts_are_per_clinic(self):
+        card = self.card(self.HOME)
+        assert (card["logins"], card["upcoming_appointments"]) == (2, 0)
+
+
 class TestClinicSignIn:
     @pytest.fixture
     def client(self, configured, monkeypatch):

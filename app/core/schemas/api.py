@@ -357,6 +357,8 @@ class ClinicOut(BaseModel):
     working_hours_end: str | None = None
     whatsapp_phone_id: str | None = None
     has_own_token: bool = False
+    # The clinic named in .env may send from the number in .env instead.
+    whatsapp_from_env: bool = False
     is_active: bool
     is_home: bool = False
     logins: int = 0

@@ -11,6 +11,9 @@ const BASE = '/api/v1';
 const TIMEOUT_MS = 20000;
 const TOKEN_KEY = 'bb.token';
 const EXPIRES_KEY = 'bb.expires';
+// The clinic the owner of the service is looking at. A clinic login never
+// sets it: the server holds a clinic login to its own clinic anyway.
+const CLINIC_KEY = 'bb.clinic';
 
 // Storage can be refused (private browsing, blocked site data). The token
 // then lasts as long as the page does.
@@ -47,6 +50,15 @@ export function clearToken() {
   store.remove(EXPIRES_KEY);
 }
 
+export function getClinic() {
+  return store.get(CLINIC_KEY);
+}
+
+export function setClinic(id) {
+  if (id) store.set(CLINIC_KEY, id);
+  else store.remove(CLINIC_KEY);
+}
+
 /** When the token runs out, in milliseconds since the epoch, or null if unknown. */
 export function tokenExpiry() {
   const raw = store.get(EXPIRES_KEY);
@@ -72,6 +84,8 @@ export async function api(path, { method = 'GET', body, query, auth = true } = {
   if (body !== undefined) headers['Content-Type'] = 'application/json';
   const token = auth ? store.get(TOKEN_KEY) : null;
   if (token) headers.Authorization = `Bearer ${token}`;
+  const clinic = auth ? store.get(CLINIC_KEY) : null;
+  if (clinic) headers['X-Business-Id'] = clinic;
 
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), TIMEOUT_MS);
@@ -93,13 +107,14 @@ export async function api(path, { method = 'GET', body, query, auth = true } = {
   const data = await response.json().catch(() => null);
   if (response.ok) return data;
 
+  const message = describe(response.status, data);
   if (response.status === 401 && auth) {
-    // The token ran out or the server's secret changed: sign in again.
+    // The token ran out, the server's secret changed, or the login was
+    // switched off: sign in again, saying why.
     clearToken();
-    window.dispatchEvent(new CustomEvent('bb:signed-out', { detail: { expired: true } }));
+    window.dispatchEvent(new CustomEvent('bb:signed-out', { detail: { expired: true, message } }));
   }
-  throw new ApiError(response.status, describe(response.status, data),
-    Number(response.headers.get('Retry-After')) || 0);
+  throw new ApiError(response.status, message, Number(response.headers.get('Retry-After')) || 0);
 }
 
 function describe(status, data) {

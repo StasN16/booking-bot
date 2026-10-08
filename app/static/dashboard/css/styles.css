@@ -626,6 +626,26 @@ button.cal-head { border-top: 0; border-inline-end: 0; color: inherit; font: inh
 
 .settings { max-width: 760px; }
 
+/* --- clinics, for the owner of the service -------------------------------- */
+
+.boot { display: grid; place-items: center; min-height: 100vh; min-height: 100dvh; padding: 24px; }
+.clinic-switcher { display: flex; flex-direction: column; gap: 4px; padding: 0 6px 10px; }
+.clinic-switcher .label { font-size: 12px; color: var(--muted); font-weight: 600; }
+.clinic-switcher select { min-height: 36px; padding: 6px 8px; font-size: 14px; }
+/* Room for a clinic's name beside its badge, and its three buttons in a row. */
+.clinic-cards { grid-template-columns: repeat(auto-fill, minmax(min(340px, 100%), 1fr)); }
+.card.is-current { border-color: var(--primary); box-shadow: 0 0 0 1px var(--primary); }
+.warning-text { color: var(--warning); font-weight: 600; }
+.secret {
+  padding: 6px 10px; font-size: 17px; letter-spacing: 0.03em; user-select: all;
+  background: var(--surface-2); border: 1px solid var(--border); border-radius: var(--radius-sm);
+}
+.login-row {
+  display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px 16px;
+  padding: 10px 14px; border-bottom: 1px solid var(--border);
+}
+.login-row:last-child { border-bottom: 0; }
+
 /* --- narrower screens ---------------------------------------------------- */
 
 @media (max-width: 1100px) {
@@ -641,7 +661,7 @@ button.cal-head { border-top: 0; border-inline-end: 0; color: inherit; font: inh
     flex-direction: row; height: auto; padding: 0 0 env(safe-area-inset-bottom);
     border-inline-end: 0; border-top: 1px solid var(--border);
   }
-  .sidebar .brand, .sidebar-foot { display: none; }
+  .sidebar .brand, .sidebar-foot, .sidebar .clinic-switcher { display: none; }
   .nav { flex-direction: row; width: 100%; gap: 0; }
   .nav-item {
     flex: 1 1 0; flex-direction: column; justify-content: center; gap: 2px; min-width: 0;
