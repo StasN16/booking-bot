@@ -5,8 +5,8 @@ import uuid
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import select
 
-from app.config import settings
 from app.core.db import async_session
+from app.core.tenancy import current_business_id
 from app.core.models.appointment import Appointment
 from app.core.models.therapist import Therapist
 from app.core.schemas.api import TherapistIn, TherapistOut, TherapistUpdate
@@ -15,8 +15,6 @@ from app.dependencies import current_user
 
 logger = logging.getLogger(__name__)
 router = APIRouter(tags=["therapists"], dependencies=[Depends(current_user)])
-
-BUSINESS_ID = settings.BUSINESS_ID
 
 
 def serialize(therapist: Therapist) -> dict:
@@ -40,7 +38,7 @@ async def get_or_404(session, therapist_id: str) -> Therapist:
         therapist = await session.get(Therapist, uuid.UUID(therapist_id))
     except ValueError:
         raise HTTPException(status_code=404, detail="Therapist not found")
-    if not therapist or str(therapist.business_id) != BUSINESS_ID:
+    if not therapist or str(therapist.business_id) != current_business_id():
         raise HTTPException(status_code=404, detail="Therapist not found")
     return therapist
 
@@ -48,7 +46,7 @@ async def get_or_404(session, therapist_id: str) -> Therapist:
 @router.get("/therapists", response_model=list[TherapistOut])
 async def list_therapists(include_inactive: bool = False):
     async with async_session() as session:
-        query = select(Therapist).where(Therapist.business_id == BUSINESS_ID)
+        query = select(Therapist).where(Therapist.business_id == current_business_id())
         if not include_inactive:
             query = query.where(Therapist.is_active == True)
         result = await session.execute(query.order_by(Therapist.name))
@@ -60,7 +58,7 @@ async def create_therapist(body: TherapistIn):
     async with async_session() as session:
         therapist = Therapist(
             id=uuid.uuid4(),
-            business_id=BUSINESS_ID,
+            business_id=current_business_id(),
             **body.model_dump(),
         )
         session.add(therapist)

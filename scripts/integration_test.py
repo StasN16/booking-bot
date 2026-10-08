@@ -18,6 +18,7 @@ from datetime import date, timedelta
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
 
 from sqlalchemy import select
+from app.config import settings
 from app.services import availability, booking
 from app.core.models.business import Business
 
@@ -44,10 +45,10 @@ async def main():
         db_ids = [str(b.id) for b in rows]
 
     print(f"business rows in DB : {db_ids}")
-    print(f"hardcoded BUSINESS_ID: {availability.BUSINESS_ID}")
+    print(f"hardcoded BUSINESS_ID: {settings.BUSINESS_ID}")
     check(
         "hardcoded BUSINESS_ID matches a real business row",
-        availability.BUSINESS_ID in db_ids,
+        settings.BUSINESS_ID in db_ids,
         "services filter every query by this id",
     )
 
@@ -401,7 +402,7 @@ async def check_reminders(treatment):
             customer = res.scalar_one_or_none()
             if not customer:
                 customer = Customer(
-                    id=uuid.uuid4(), business_id=reminders.BUSINESS_ID,
+                    id=uuid.uuid4(), business_id=settings.BUSINESS_ID,
                     phone=TEST_PHONE, language="he", conversation_state="idle",
                 )
                 s.add(customer)
@@ -421,7 +422,7 @@ async def check_reminders(treatment):
             # Placed squarely inside the 24 hour window.
             start = virtual_now + timedelta(hours=23)
             appt = Appointment(
-                id=uuid.uuid4(), business_id=reminders.BUSINESS_ID,
+                id=uuid.uuid4(), business_id=settings.BUSINESS_ID,
                 customer_id=customer.id, therapist_id=therapist.id,
                 treatment_id=treatment["id"], start_time=start,
                 end_time=start + timedelta(minutes=60), status="confirmed",

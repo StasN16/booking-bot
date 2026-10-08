@@ -6,8 +6,8 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import func, select
 
-from app.config import settings
 from app.core.db import async_session
+from app.core.tenancy import current_business_id
 from app.core.models.appointment import Appointment
 from app.core.models.customer import Customer
 from app.core.schemas.api import CustomerOut, CustomerUpdate
@@ -15,8 +15,6 @@ from app.dependencies import current_user
 
 logger = logging.getLogger(__name__)
 router = APIRouter(tags=["customers"], dependencies=[Depends(current_user)])
-
-BUSINESS_ID = settings.BUSINESS_ID
 
 
 def serialize(customer: Customer, appointment_count: int = 0) -> dict:
@@ -36,7 +34,7 @@ async def get_or_404(session, customer_id: str) -> Customer:
         customer = await session.get(Customer, uuid.UUID(customer_id))
     except ValueError:
         raise HTTPException(status_code=404, detail="No such customer")
-    if not customer or str(customer.business_id) != BUSINESS_ID:
+    if not customer or str(customer.business_id) != current_business_id():
         raise HTTPException(status_code=404, detail="No such customer")
     return customer
 
@@ -47,7 +45,7 @@ async def list_customers(
     limit: Annotated[int, Query(ge=1, le=1000)] = 200,
 ):
     async with async_session() as session:
-        query = select(Customer).where(Customer.business_id == BUSINESS_ID)
+        query = select(Customer).where(Customer.business_id == current_business_id())
         if search:
             pattern = f"%{search}%"
             query = query.where(
@@ -61,7 +59,7 @@ async def list_customers(
         counts = dict(
             (await session.execute(
                 select(Appointment.customer_id, func.count(Appointment.id))
-                .where(Appointment.business_id == BUSINESS_ID)
+                .where(Appointment.business_id == current_business_id())
                 .group_by(Appointment.customer_id)
             )).all()
         )

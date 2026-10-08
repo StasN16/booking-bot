@@ -2,8 +2,8 @@ import logging
 import uuid
 from datetime import datetime, timedelta
 from sqlalchemy import select
-from app.config import settings
 from app.core.db import async_session
+from app.core.tenancy import current_business_id
 from app.core import audit
 from app.core.models.customer import Customer
 from app.core.models.appointment import Appointment
@@ -13,9 +13,6 @@ from app.core.timeutils import now as clinic_now, to_clinic_tz
 from app.services.date_parser import parse_date, parse_time
 
 logger = logging.getLogger(__name__)
-
-
-BUSINESS_ID = settings.BUSINESS_ID
 
 
 def pick_best_match(candidates: list, query: str):
@@ -98,7 +95,7 @@ async def _get_customer(session, customer_phone: str):
     result = await session.execute(
         select(Customer).where(
             Customer.phone == customer_phone,
-            Customer.business_id == BUSINESS_ID
+            Customer.business_id == current_business_id()
         )
     )
     return result.scalar_one_or_none()
@@ -124,7 +121,7 @@ async def get_or_create_customer(phone: str, name: str = None) -> Customer:
         if not customer:
             customer = Customer(
                 id=uuid.uuid4(),
-                business_id=BUSINESS_ID,
+                business_id=current_business_id(),
                 phone=phone,
                 name=name,
                 conversation_state="idle"
@@ -152,7 +149,7 @@ async def create_appointment(
             if not customer:
                 customer = Customer(
                     id=uuid.uuid4(),
-                    business_id=BUSINESS_ID,
+                    business_id=current_business_id(),
                     phone=customer_phone,
                     conversation_state="idle"
                 )
@@ -161,7 +158,7 @@ async def create_appointment(
 
             result = await session.execute(
                 select(Treatment).where(
-                    Treatment.business_id == BUSINESS_ID,
+                    Treatment.business_id == current_business_id(),
                     Treatment.is_active == True
                 )
             )
@@ -172,7 +169,7 @@ async def create_appointment(
 
             result = await session.execute(
                 select(Therapist).where(
-                    Therapist.business_id == BUSINESS_ID,
+                    Therapist.business_id == current_business_id(),
                     Therapist.is_active == True
                 )
             )
@@ -210,7 +207,7 @@ async def create_appointment(
 
             appointment = Appointment(
                 id=uuid.uuid4(),
-                business_id=BUSINESS_ID,
+                business_id=current_business_id(),
                 customer_id=customer.id,
                 therapist_id=therapist.id,
                 treatment_id=treatment.id,

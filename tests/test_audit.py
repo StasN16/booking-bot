@@ -198,6 +198,15 @@ class TestWhatsappCallIsTimed:
     as a measured one.
     """
 
+    @pytest.fixture(autouse=True)
+    def a_number_to_send_from(self, monkeypatch):
+        """The home clinic sends from the number in .env; give it one."""
+        from app.config import settings
+        from app.core import tenancy
+        tenancy.forget_channels()
+        monkeypatch.setattr(settings, "WHATSAPP_PHONE_ID", "111")
+        monkeypatch.setattr(settings, "WHATSAPP_TOKEN", "token")
+
     @pytest.mark.asyncio
     async def test_the_api_call_records_a_real_duration(self, sink, monkeypatch):
         import httpx

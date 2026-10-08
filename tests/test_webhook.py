@@ -51,7 +51,13 @@ class TestDeduplication:
 class TestExtractMessages:
     def test_extracts_a_text_message(self):
         found = extract_messages(payload(text_message(body="היי")))
-        assert found == [{"id": "wamid.1", "from": "972500000000", "text": "היי"}]
+        assert found == [{"id": "wamid.1", "from": "972500000000", "text": "היי", "to": None}]
+
+    def test_says_which_number_it_was_sent_to(self):
+        """Meta names the receiving number in metadata; that is how a clinic is found."""
+        body = payload(text_message())
+        body["entry"][0]["changes"][0]["value"]["metadata"] = {"phone_number_id": "1072796699244200"}
+        assert extract_messages(body)[0]["to"] == "1072796699244200"
 
     def test_extracts_several_messages(self):
         found = extract_messages(payload(
@@ -85,3 +91,64 @@ class TestExtractMessages:
             "statuses": [{"id": "wamid.1", "status": "delivered"}]
         }}]}]}
         assert extract_messages(body) == []
+
+
+class TestEachMessageGoesToItsClinic:
+    """One server answers for many clinics, each with its own WhatsApp number."""
+
+    @pytest.fixture
+    def clinics(self, monkeypatch):
+        from app.config import settings
+        from app.core import tenancy
+
+        tenancy.forget_channels()
+        monkeypatch.setattr(settings, "BUSINESS_ID", "home-clinic")
+        monkeypatch.setattr(settings, "WHATSAPP_PHONE_ID", "111")
+        monkeypatch.setattr(settings, "WHATSAPP_TOKEN", "server-token")
+
+        async def load():
+            tenancy._channels.update({"clinic-b": tenancy.Channel("222", "b-token")})
+            tenancy._owners.update({"222": "clinic-b"})
+            tenancy._last_refresh = __import__("time").monotonic()
+        monkeypatch.setattr(tenancy, "refresh_channels", load)
+        yield tenancy
+        tenancy.forget_channels()
+
+    def post(self, phone_number_id, monkeypatch):
+        from fastapi.testclient import TestClient
+        from app.core import tenancy
+        from app.main import app
+
+        answered = []
+
+        async def handle_message(phone, text):
+            answered.append((tenancy.current_business_id(), phone, text))
+        monkeypatch.setattr(webhook, "handle_message", handle_message)
+
+        body = payload(text_message())
+        body["entry"][0]["changes"][0]["value"]["metadata"] = {"phone_number_id": phone_number_id}
+        response = TestClient(app).post("/api/v1/webhook", json=body)
+        assert response.status_code == 200
+        return answered
+
+    def test_a_clinic_answers_messages_to_its_own_number(self, clinics, monkeypatch):
+        assert self.post("222", monkeypatch) == [("clinic-b", "972500000000", "שלום")]
+
+    def test_the_number_in_env_belongs_to_the_home_clinic(self, clinics, monkeypatch):
+        assert self.post("111", monkeypatch) == [("home-clinic", "972500000000", "שלום")]
+
+    def test_a_number_no_clinic_has_is_not_answered(self, clinics, monkeypatch):
+        """Answering it as some other clinic would put that clinic's data in a stranger's chat."""
+        assert self.post("999", monkeypatch) == []
+
+    @pytest.mark.asyncio
+    async def test_unknown_numbers_do_not_reload_on_every_message(self, clinics, monkeypatch):
+        loads = []
+
+        async def counting_load():
+            loads.append(1)
+            clinics._last_refresh = __import__("time").monotonic()
+        monkeypatch.setattr(clinics, "refresh_channels", counting_load)
+        for _ in range(5):
+            assert await clinics.business_for_phone_number("999") is None
+        assert len(loads) == 1

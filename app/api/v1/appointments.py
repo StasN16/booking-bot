@@ -14,8 +14,8 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import select
 
-from app.config import settings
 from app.core.db import async_session
+from app.core.tenancy import current_business_id
 from app.core.models.appointment import Appointment
 from app.core.models.customer import Customer
 from app.core.models.therapist import Therapist
@@ -42,7 +42,6 @@ from app.services.date_parser import parse_date
 logger = logging.getLogger(__name__)
 router = APIRouter(tags=["appointments"], dependencies=[Depends(current_user)])
 
-BUSINESS_ID = settings.BUSINESS_ID
 
 # Booking services answer with codes; the API answers with status numbers.
 ERROR_STATUS = {
@@ -139,7 +138,7 @@ async def list_appointments(
     start, end = bounds(from_date, to_date)
 
     async with async_session() as session:
-        query = select(Appointment).where(Appointment.business_id == BUSINESS_ID)
+        query = select(Appointment).where(Appointment.business_id == current_business_id())
 
         if start:
             query = query.where(Appointment.start_time >= to_clinic_tz(
@@ -158,7 +157,7 @@ async def list_appointments(
             found = await session.execute(
                 select(Customer).where(
                     Customer.phone == (normalize_phone(customer_phone) or customer_phone),
-                    Customer.business_id == BUSINESS_ID,
+                    Customer.business_id == current_business_id(),
                 )
             )
             customer = found.scalar_one_or_none()
@@ -222,7 +221,7 @@ async def get_appointment(appointment_id: str):
             appointment = await session.get(Appointment, uuid.UUID(appointment_id))
         except ValueError:
             raise HTTPException(status_code=404, detail="No such appointment")
-        if not appointment or str(appointment.business_id) != BUSINESS_ID:
+        if not appointment or str(appointment.business_id) != current_business_id():
             raise HTTPException(status_code=404, detail="No such appointment")
         return await serialize(session, appointment)
 
@@ -235,7 +234,7 @@ async def move_appointment(appointment_id: str, body: AppointmentReschedule):
             appointment = await session.get(Appointment, uuid.UUID(appointment_id))
         except ValueError:
             raise HTTPException(status_code=404, detail="No such appointment")
-        if not appointment or str(appointment.business_id) != BUSINESS_ID:
+        if not appointment or str(appointment.business_id) != current_business_id():
             raise HTTPException(status_code=404, detail="No such appointment")
         customer = await session.get(Customer, appointment.customer_id)
         phone = customer.phone if customer else None
@@ -265,7 +264,7 @@ async def edit_notes(appointment_id: str, body: AppointmentNotes):
             appointment = await session.get(Appointment, uuid.UUID(appointment_id))
         except ValueError:
             raise HTTPException(status_code=404, detail="No such appointment")
-        if not appointment or str(appointment.business_id) != BUSINESS_ID:
+        if not appointment or str(appointment.business_id) != current_business_id():
             raise HTTPException(status_code=404, detail="No such appointment")
         appointment.notes = (body.notes or "").strip() or None
         await session.commit()
@@ -280,7 +279,7 @@ async def cancel(appointment_id: str):
             appointment = await session.get(Appointment, uuid.UUID(appointment_id))
         except ValueError:
             raise HTTPException(status_code=404, detail="No such appointment")
-        if not appointment or str(appointment.business_id) != BUSINESS_ID:
+        if not appointment or str(appointment.business_id) != current_business_id():
             raise HTTPException(status_code=404, detail="No such appointment")
         customer = await session.get(Customer, appointment.customer_id)
         phone = customer.phone if customer else None
@@ -315,7 +314,7 @@ async def statistics(
     async with async_session() as session:
         result = await session.execute(
             select(Appointment).where(
-                Appointment.business_id == BUSINESS_ID,
+                Appointment.business_id == current_business_id(),
                 Appointment.start_time >= to_clinic_tz(
                     dt.datetime.combine(start, dt.time.min)),
                 Appointment.start_time <= to_clinic_tz(
@@ -326,9 +325,9 @@ async def statistics(
 
         # Two queries for every name and price, instead of two per appointment.
         treatments = {t.id: t for t in (await session.execute(
-            select(Treatment).where(Treatment.business_id == BUSINESS_ID))).scalars()}
+            select(Treatment).where(Treatment.business_id == current_business_id()))).scalars()}
         therapists = {t.id: t for t in (await session.execute(
-            select(Therapist).where(Therapist.business_id == BUSINESS_ID))).scalars()}
+            select(Therapist).where(Therapist.business_id == current_business_id()))).scalars()}
 
     confirmed = [a for a in appointments if a.status == "confirmed"]
     cancelled = [a for a in appointments if a.status == "cancelled"]
@@ -397,7 +396,7 @@ async def availability(
 
     async with async_session() as session:
         treatment = await session.get(Treatment, treatment_uuid)
-        if not treatment or str(treatment.business_id) != BUSINESS_ID:
+        if not treatment or str(treatment.business_id) != current_business_id():
             raise HTTPException(status_code=404, detail="No such treatment")
         name, duration = treatment.name, treatment.duration_minutes
 

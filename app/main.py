@@ -8,6 +8,7 @@ from fastapi.responses import RedirectResponse
 from fastapi.staticfiles import StaticFiles
 
 from app.config import settings
+from app.core import tenancy
 from app.api.v1 import (
     appointments,
     auth,
@@ -62,6 +63,13 @@ async def audit_loop():
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     tasks = []
+
+    # Which WhatsApp number belongs to which clinic. Messages still find
+    # their clinic if this fails now, by loading the numbers on demand.
+    try:
+        await tenancy.refresh_channels()
+    except Exception as e:
+        logger.warning(f"Could not load the clinics' WhatsApp numbers yet: {e}")
 
     if settings.REMINDERS_ENABLED:
         tasks.append(asyncio.create_task(reminder_loop()))

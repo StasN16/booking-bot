@@ -1,8 +1,9 @@
 import logging
+import uuid
 from datetime import datetime, date, time, timedelta
 from sqlalchemy import select
-from app.config import settings
 from app.core.db import async_session
+from app.core.tenancy import current_business_id
 from app.core import audit
 from app.core.timeutils import now as clinic_now, to_clinic_tz
 from app.core.models.business import Business
@@ -13,8 +14,6 @@ from app.core.models.appointment import Appointment
 logger = logging.getLogger(__name__)
 
 
-BUSINESS_ID = settings.BUSINESS_ID
-
 SLOT_STEP_MINUTES = 30
 
 async def get_treatments() -> list:
@@ -22,7 +21,7 @@ async def get_treatments() -> list:
     async with async_session() as session:
         result = await session.execute(
             select(Treatment).where(
-                Treatment.business_id == BUSINESS_ID,
+                Treatment.business_id == current_business_id(),
                 Treatment.is_active == True
             )
         )
@@ -43,7 +42,7 @@ async def get_therapists() -> list:
     async with async_session() as session:
         result = await session.execute(
             select(Therapist).where(
-                Therapist.business_id == BUSINESS_ID,
+                Therapist.business_id == current_business_id(),
                 Therapist.is_active == True
             )
         )
@@ -159,7 +158,7 @@ async def get_available_slots(treatment_id: str, target_date: date,
 
         result = await session.execute(
             select(Therapist).where(
-                Therapist.business_id == BUSINESS_ID,
+                Therapist.business_id == current_business_id(),
                 Therapist.is_active == True
             )
         )
@@ -171,7 +170,7 @@ async def get_available_slots(treatment_id: str, target_date: date,
         end_of_day = to_clinic_tz(datetime.combine(target_date, time.max))
 
         query = select(Appointment).where(
-            Appointment.business_id == BUSINESS_ID,
+            Appointment.business_id == current_business_id(),
             Appointment.start_time >= start_of_day,
             Appointment.start_time <= end_of_day,
             Appointment.status == "confirmed"
@@ -201,6 +200,27 @@ async def get_available_slots(treatment_id: str, target_date: date,
         })
 
         return slots
+
+
+async def get_business_summary() -> str:
+    """
+    Which clinic the bot is answering for: its name, address, phone and hours.
+
+    One server answers for many clinics, so the bot has to be told whose
+    receptionist it is, or a customer asking where to come gets nothing.
+    """
+    async with async_session() as session:
+        business = await session.get(Business, uuid.UUID(current_business_id()))
+    if not business:
+        return ""
+    lines = [f"Name: {business.name}"]
+    if business.address:
+        lines.append(f"Address: {business.address}")
+    if business.phone:
+        lines.append(f"Phone: {business.phone}")
+    if business.working_hours_start and business.working_hours_end:
+        lines.append(f"Opening hours: {business.working_hours_start}-{business.working_hours_end}")
+    return "\n".join(lines)
 
 
 async def get_treatments_summary() -> str:

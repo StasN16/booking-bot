@@ -1,6 +1,7 @@
 from collections import OrderedDict
 from fastapi import APIRouter, BackgroundTasks, Request, HTTPException, Query
 from app.config import settings
+from app.core import tenancy
 from app.services.conversation import handle_message
 import logging
 
@@ -26,11 +27,17 @@ def already_processed(message_id: str) -> bool:
 
 
 def extract_messages(body: dict) -> list:
-    """Pull the text messages out of a webhook payload, ignoring the rest."""
+    """
+    Pull the text messages out of a webhook payload, ignoring the rest.
+
+    Each one says which WhatsApp number it was sent to ("to", Meta's phone
+    number id), which is how it finds its clinic.
+    """
     messages = []
     for entry in body.get("entry") or []:
         for change in entry.get("changes") or []:
             value = change.get("value") or {}
+            to = (value.get("metadata") or {}).get("phone_number_id")
             for message in value.get("messages") or []:
                 if message.get("type") and message.get("type") != "text":
                     continue
@@ -41,8 +48,15 @@ def extract_messages(body: dict) -> list:
                         "id": message.get("id"),
                         "from": from_number,
                         "text": text,
+                        "to": to,
                     })
     return messages
+
+
+async def handle_message_for(business_id: str, from_number: str, text: str):
+    """Answer a message as the clinic it was sent to."""
+    with tenancy.acting_for(business_id):
+        await handle_message(from_number, text)
 
 
 @router.get("/webhook")
@@ -73,9 +87,17 @@ async def receive_message(request: Request, background_tasks: BackgroundTasks):
                 logger.info(f"Skipping duplicate delivery of message {message['id']}")
                 continue
 
+            business_id = await tenancy.business_for_phone_number(message["to"])
+            if business_id is None:
+                # A number no clinic has: nobody to answer for.
+                logger.warning(f"Message to WhatsApp number {message['to']}, "
+                               f"which no active clinic has; ignored")
+                continue
+
             logger.info(f"Message from {message['from']}: {message['text']}")
             # Replying takes several seconds; answer Meta now and work after.
-            background_tasks.add_task(handle_message, message["from"], message["text"])
+            background_tasks.add_task(handle_message_for, business_id,
+                                      message["from"], message["text"])
 
     except Exception as e:
         logger.exception(f"Error processing webhook: {e}")

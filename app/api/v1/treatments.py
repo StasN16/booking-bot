@@ -5,8 +5,8 @@ import uuid
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import select
 
-from app.config import settings
 from app.core.db import async_session
+from app.core.tenancy import current_business_id
 from app.core.models.appointment import Appointment
 from app.core.models.treatment import Treatment
 from app.core.schemas.api import TreatmentIn, TreatmentOut, TreatmentUpdate
@@ -15,8 +15,6 @@ from app.dependencies import current_user
 
 logger = logging.getLogger(__name__)
 router = APIRouter(tags=["treatments"], dependencies=[Depends(current_user)])
-
-BUSINESS_ID = settings.BUSINESS_ID
 
 
 def serialize(treatment: Treatment) -> dict:
@@ -35,7 +33,7 @@ async def get_or_404(session, treatment_id: str) -> Treatment:
         treatment = await session.get(Treatment, uuid.UUID(treatment_id))
     except ValueError:
         raise HTTPException(status_code=404, detail="Treatment not found")
-    if not treatment or str(treatment.business_id) != BUSINESS_ID:
+    if not treatment or str(treatment.business_id) != current_business_id():
         raise HTTPException(status_code=404, detail="Treatment not found")
     return treatment
 
@@ -43,7 +41,7 @@ async def get_or_404(session, treatment_id: str) -> Treatment:
 @router.get("/treatments", response_model=list[TreatmentOut])
 async def list_treatments(include_inactive: bool = False):
     async with async_session() as session:
-        query = select(Treatment).where(Treatment.business_id == BUSINESS_ID)
+        query = select(Treatment).where(Treatment.business_id == current_business_id())
         if not include_inactive:
             query = query.where(Treatment.is_active == True)
         result = await session.execute(query.order_by(Treatment.name))
@@ -55,7 +53,7 @@ async def create_treatment(body: TreatmentIn):
     async with async_session() as session:
         treatment = Treatment(
             id=uuid.uuid4(),
-            business_id=BUSINESS_ID,
+            business_id=current_business_id(),
             **body.model_dump(),
         )
         session.add(treatment)

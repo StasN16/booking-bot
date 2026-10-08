@@ -5,6 +5,7 @@ from app.core.enums import ConversationState
 from app.services.ai_engine import process_message
 from app.services.whatsapp import send_message
 from app.services.availability import (
+    get_business_summary,
     get_treatments_summary,
     get_therapists_summary,
     get_available_slots,
@@ -20,6 +21,7 @@ from app.services.booking import (
 from app.services.date_parser import parse_date
 from app.services import session_store
 from app.core import audit
+from app.core.tenancy import current_business_id
 
 logger = logging.getLogger(__name__)
 
@@ -110,6 +112,7 @@ async def handle_message(from_number: str, message_text: str):
     """Main function that handles incoming WhatsApp messages"""
     language = DEFAULT_LANGUAGE
     with audit.trace("handle_message",
+                     clinic=current_business_id(),
                      phone=audit.mask_phone(from_number),
                      message_length=len(message_text or "")) as turn:
       try:
@@ -133,9 +136,11 @@ async def handle_message(from_number: str, message_text: str):
 
         # Load real clinic data from database
         with audit.step("clinic.load") as s_clinic:
+            business_data = await get_business_summary()
             clinic_data = await get_treatments_summary()
             therapist_data = await get_therapists_summary()
             s_clinic.outputs = {
+                "clinic_found": bool(business_data),
                 "treatments_chars": len(clinic_data),
                 "therapists_chars": len(therapist_data),
                 "treatments_empty": "אין טיפולים" in clinic_data,
@@ -149,6 +154,7 @@ async def handle_message(from_number: str, message_text: str):
             clinic_data=clinic_data,
             therapist_data=therapist_data,
             booking_context=booking_context,
+            business_data=business_data,
         )
 
         reply = ai_response.get("response", "")
