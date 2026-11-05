@@ -148,6 +148,64 @@ user signing in with it must choose their own before anything else opens;
 the Users window marks who has not done so yet. Your owner password is
 separate and does not change.
 
+## Going online (Render)
+
+Online, the bot answers around the clock and each clinic opens its
+dashboard from anywhere. It runs on [Render](https://render.com): one
+Starter server (about $7 a month) in Frankfurt, next to the Supabase
+database. `render.yaml` describes that server, and Render builds it from
+the file.
+
+### Before you start
+
+1. **Supabase.** Open your project. If it says *Paused*, press **Restore**.
+   Then **Connect** → **Session pooler** → copy the address, and put your
+   database password where it says `[YOUR-PASSWORD]` (forgotten: Project
+   Settings → Database → Reset database password). It must be the
+   *Session pooler* address; the direct one cannot be reached from Render.
+2. **Meta.** Your developer app → App settings → Basic → **App secret** →
+   Show. With it, the server refuses any message not sent by WhatsApp.
+3. **Your other values** are in `.env` on your Mac. `open -e ~/booking-bot/.env`
+   shows it; read it, don't change it.
+4. **A new owner password**, for online.
+
+### Create the server (once)
+
+1. Sign in at render.com with GitHub, and add a payment card (Billing).
+2. **New** → **Blueprint** → choose the `booking-bot` repository. Render
+   reads `render.yaml`.
+3. Fill in what it asks for:
+
+   | Asked for | From |
+   |---|---|
+   | `DATABASE_URL` | Supabase, step 1 above |
+   | `ADMIN_PASSWORD` | your new owner password |
+   | `WHATSAPP_APP_SECRET` | Meta, step 2 above |
+   | `OPENAI_API_KEY`, `WHATSAPP_TOKEN`, `WHATSAPP_VERIFY_TOKEN`, `WHATSAPP_PHONE_ID`, `BUSINESS_ID`, `CLINIC_START_PASSWORD` | `.env` on your Mac |
+
+4. **Apply.** After a few minutes the service shows **Live**, with its
+   address, such as `https://booking-bot-xxxx.onrender.com`.
+
+### Point WhatsApp at it
+
+Meta developer app → WhatsApp → Configuration → Webhook → **Edit**.
+Callback URL: `https://<your address>/api/v1/webhook`, with the same verify
+token → **Verify and save**. Check that `messages` is subscribed.
+
+Then open the address, sign in (email empty, the new owner password) and
+send the bot a WhatsApp message.
+
+### After that
+
+- Every change merged into `main` on GitHub goes online by itself. The
+  database is brought up to date first; if that fails, the version already
+  running keeps running.
+- The bot no longer needs your Mac. `start.sh` still runs a private copy
+  there, with its own database, for trying changes.
+- Render's **Logs** tab shows what the server is doing.
+- A new server with no clinics yet opens on the Clinics page, to add the
+  first one.
+
 ## Settings (`.env`)
 
 `.env` holds this machine's settings and secrets. It is never committed.
@@ -155,11 +213,12 @@ separate and does not change.
 
 | Key | Meaning |
 |---|---|
-| `DATABASE_URL` | The database. Setup points it at the local one and keeps earlier URLs as comments. |
-| `BUSINESS_ID` | The main clinic: the one you see first, and the only one that may use the WhatsApp number in `.env`. Leave it as the seed data set it. |
+| `DATABASE_URL` | The database. Setup points it at the local one and keeps earlier URLs as comments. A `postgres://` address, as Supabase gives it, is fine. |
+| `BUSINESS_ID` | The main clinic: the one you see first, and the only one that may use the WhatsApp number in `.env`. Leave it as the seed data set it. May be empty online, where every clinic has its own number. |
 | `TIMEZONE` | The clinic's timezone. Every time is shown and booked in it. Defaults to `Asia/Jerusalem`. |
 | `OPENAI_API_KEY` | For GPT-4o. |
 | `WHATSAPP_TOKEN`, `WHATSAPP_PHONE_ID`, `WHATSAPP_VERIFY_TOKEN` | The WhatsApp Cloud API connection. The phone ID is the main clinic's number. Every clinic's number uses this token unless the clinic has its own. |
+| `WHATSAPP_APP_SECRET` | The Meta app's secret. Set, the server refuses messages WhatsApp did not send. Required online; blank only on a development machine. |
 | `ADMIN_PASSWORD`, `JWT_SECRET` | Your owner password (email left empty), and the key every sign-in is signed with. If either is blank, the dashboard stays locked. |
 | `JWT_HOURS` | How long a dashboard sign-in lasts. Defaults to 12. |
 | `CLINIC_START_PASSWORD` | The password new clinic users start with (see [The start password](#the-start-password)). Blank: a random one each time. |
@@ -167,6 +226,8 @@ separate and does not change.
 | `NGROK_DOMAIN` | Optional fixed ngrok domain, so the webhook URL never changes. |
 | `REMINDERS_ENABLED`, `REMINDER_POLL_MINUTES` | The reminder loop. Defaults to on, every 10 minutes. |
 | `AUDIT_WATCH_MINUTES` | How often the server checks its own audit trail. 0 turns the checks off. |
+| `CLIENT_IP_HEADER` | Online only: the header the host's proxy sets to the visitor's address (`CF-Connecting-IP` on Render), so failed sign-ins are counted per visitor. |
+| `API_DOCS` | The API page at `/docs`. On by default; off online. |
 
 Check that the credentials work, without changing anything:
 
@@ -211,6 +272,7 @@ app/
 migrations/         Alembic database migrations
 scripts/            setup, start, checks
 tests/              unit tests
+render.yaml         the online server, for Render
 ```
 
 The bot and the dashboard share one booking service
@@ -240,6 +302,8 @@ only ever be displayed, never run.
 | The dashboard says sign-in is not set up | Run `./scripts/setup_mac.sh`, then start the server again. |
 | Supabase cannot be reached | Some home networks block port 5432. Use the local database, or a phone hotspot for Supabase work. |
 | Something went wrong in a conversation | `poetry run python scripts/analyze_audit.py` lists what failed and where. |
+| Online, the bot does not answer | Render → your service → **Logs**. "Webhook refused: not signed" means `WHATSAPP_APP_SECRET` is not the app's secret. Also check Meta's Callback URL is the Render address. |
+| Online, a new version does not start | Render → **Events** shows why. "Could not" reach the database: check `DATABASE_URL` is the Session pooler address and the Supabase project is not paused. The previous version keeps running meanwhile. |
 
 ## Known limits and next steps
 
@@ -247,10 +311,10 @@ only ever be displayed, never run.
   send free text only within 24 hours of the customer's last message.
   Outside that window a reminder needs a message template approved by
   Meta. Without one, reminders to customers who booked days ahead are
-  refused. This is planned for before going live (step 12).
+  refused. This is needed before real customers rely on reminders.
 - **Turning a customer's reminders off** stops reminders only. The bot
   still answers that customer.
 - **Clinics are added by you**, on the Clinics page. There is no sign-up
   page or billing for clinics yet.
 - **Step 11:** syncing each clinic's appointments to its Google Calendar.
-- **Step 12:** running on Railway with Supabase, instead of on this Mac.
+- **Step 12:** running online on Render: see [Going online](#going-online-render).
