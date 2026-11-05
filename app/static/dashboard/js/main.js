@@ -80,6 +80,22 @@ const ctx = {
     if (chosen && !this.clinics.some((clinic) => clinic.id === chosen)) setClinic(null);
   },
 
+  /**
+   * Which clinic the owner sees: the one chosen before, else the main one,
+   * else the first. On a new server there is none yet, and the owner gets
+   * only the Clinics page, to add the first. Says whether there is one.
+   */
+  pickClinic() {
+    if (!this.clinics.length) {
+      this.business = null;
+      this.therapists = [];
+      this.treatments = [];
+      return false;
+    }
+    if (!getClinic() && !this.clinics.some((clinic) => clinic.is_home)) setClinic(this.clinics[0].id);
+    return true;
+  },
+
   setBusiness(business) {
     this.business = business;
     for (const el of root.querySelectorAll('.brand-name')) el.textContent = business.name;
@@ -110,7 +126,12 @@ const ctx = {
   async clinicsChanged(changedId) {
     try {
       await this.loadClinics();
-      if (changedId && this.business && changedId === this.business.id) await this.loadReference();
+      if (!this.business) {
+        // The first clinic on a new server: open it.
+        if (this.pickClinic()) await this.loadReference();
+      } else if (changedId && changedId === this.business.id) {
+        await this.loadReference();
+      }
     } catch (error) {
       if (error.status !== 401) toast(error.message, 'error');
       return;
@@ -232,7 +253,7 @@ async function start({ password = '' } = {}) {
       return;
     }
     if (ctx.isOwner) await ctx.loadClinics();
-    await ctx.loadReference();
+    if (!ctx.isOwner || ctx.pickClinic()) await ctx.loadReference();
   } catch (error) {
     // A rejected token has already brought the sign-in page back, and a
     // login told to choose its own password is already being asked to.
@@ -263,6 +284,8 @@ function showChoosePassword(current = '') {
 }
 
 function visibleRoutes() {
+  // The owner of a server with no clinic yet has only the page to add one.
+  if (!ctx.business) return ROUTES.filter((r) => r.path === 'clinics');
   return ROUTES.filter((r) => !r.ownerOnly || ctx.isOwner);
 }
 
@@ -317,9 +340,11 @@ function route() {
   // Moving to another page is a moment where reloading loses nothing.
   if (reloadIfWaiting()) return;
   const { path, params } = parseHash();
-  const entry = visibleRoutes().find((r) => r.path === path);
+  const routes = visibleRoutes();
+  const entry = routes.find((r) => r.path === path);
   if (!entry) {
-    window.history.replaceState(null, '', hashFor(HOME));
+    const home = routes.some((r) => r.path === HOME) ? HOME : routes[0].path;
+    window.history.replaceState(null, '', hashFor(home));
     route();
     return;
   }

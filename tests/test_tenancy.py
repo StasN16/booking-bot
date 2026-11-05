@@ -20,6 +20,7 @@ def clinics(monkeypatch):
     monkeypatch.setattr(settings, "WHATSAPP_TOKEN", "server-token")
     tenancy._channels.update({"clinic-b": tenancy.Channel("222", "b-token")})
     tenancy._owners.update({"222": "clinic-b"})
+    tenancy._known.update({"home-clinic", "clinic-b"})  # both in the database
     yield
     tenancy.forget_channels()
 
@@ -199,3 +200,52 @@ class TestLoadingNumbers:
         await tenancy.refresh_channels()
         assert tenancy.channel("home-clinic") == tenancy.Channel("111", "server-token")
         assert await tenancy.business_for_phone_number("111") == "home-clinic"
+
+
+class TestNoMainClinic:
+    """Online, BUSINESS_ID may be left empty: every clinic has its own number."""
+
+    @pytest.fixture(autouse=True)
+    def no_home(self, monkeypatch):
+        monkeypatch.setattr(settings, "BUSINESS_ID", "")
+
+        async def load():
+            tenancy._last_refresh = __import__("time").monotonic()
+        monkeypatch.setattr(tenancy, "refresh_channels", load)
+
+    @pytest.mark.asyncio
+    async def test_the_number_in_env_answers_for_nobody(self):
+        assert await tenancy.business_for_phone_number("111") is None
+        assert await tenancy.business_for_phone_number(None) is None
+
+    @pytest.mark.asyncio
+    async def test_clinics_with_their_own_numbers_still_answer(self):
+        assert await tenancy.business_for_phone_number("222") == "clinic-b"
+        assert tenancy.channel("clinic-b") == tenancy.Channel("222", "b-token")
+
+    def test_nothing_sends_from_the_number_in_env(self):
+        assert tenancy.channel("") is None
+
+
+class TestMainClinicMissingFromTheDatabase:
+    """BUSINESS_ID copied from another machine, naming a clinic this database lacks."""
+
+    @pytest.fixture(autouse=True)
+    def unknown_home(self, monkeypatch):
+        tenancy._known.discard("home-clinic")
+
+        async def load():
+            tenancy._last_refresh = __import__("time").monotonic()
+        monkeypatch.setattr(tenancy, "refresh_channels", load)
+
+    @pytest.mark.asyncio
+    async def test_the_number_in_env_answers_for_nobody(self):
+        assert await tenancy.business_for_phone_number("111") is None
+        assert await tenancy.business_for_phone_number(None) is None
+
+    def test_and_sends_for_nobody(self):
+        assert tenancy.channel("home-clinic") is None
+
+    @pytest.mark.asyncio
+    async def test_other_clinics_are_untouched(self):
+        assert await tenancy.business_for_phone_number("222") == "clinic-b"

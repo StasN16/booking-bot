@@ -66,6 +66,7 @@ class Channel:
 _channels: dict[str, Channel] = {}  # business id -> its WhatsApp number
 _owners: dict[str, str] = {}  # WhatsApp phone number id -> business id
 _off: set[str] = set()  # clinics turned off: no WhatsApp in or out
+_known: set[str] = set()  # every clinic in the database, on or off
 _last_refresh = 0.0
 
 # An unknown number reloads the table at most this often, so a stream of
@@ -83,6 +84,7 @@ async def refresh_channels() -> None:
         rows = (await session.execute(select(Business))).scalars().all()
 
     channels, owners, off = {}, {}, set()
+    known = {str(business.id) for business in rows}
     for business in rows:
         if not business.is_active:
             off.add(str(business.id))
@@ -99,6 +101,8 @@ async def refresh_channels() -> None:
     _owners.update(owners)
     _off.clear()
     _off.update(off)
+    _known.clear()
+    _known.update(known)
     _last_refresh = time.monotonic()
     logger.info(f"WhatsApp numbers loaded for {len(channels)} clinic(s)")
 
@@ -108,7 +112,10 @@ def _home_number_in_use() -> bool:
     Whether the number in .env answers for the clinic named by BUSINESS_ID.
     Not once that clinic is turned off: off means off, for it as for any.
     """
-    return bool(settings.WHATSAPP_PHONE_ID) and settings.BUSINESS_ID not in _off
+    home = settings.BUSINESS_ID
+    # A main clinic missing from the database (an id copied from another
+    # machine) would take messages it has no data to answer.
+    return bool(home) and bool(settings.WHATSAPP_PHONE_ID) and home in _known and home not in _off
 
 
 def channel(business_id=None) -> Channel | None:
@@ -132,7 +139,8 @@ async def business_for_phone_number(phone_number_id: str | None) -> str | None:
     if not phone_number_id:
         # Meta always says which number a message came to. Without it there
         # is only the single-clinic answer.
-        return settings.BUSINESS_ID if settings.BUSINESS_ID not in _off else None
+        home = settings.BUSINESS_ID
+        return home if home and home in _known and home not in _off else None
 
     if phone_number_id not in _owners and \
             time.monotonic() - _last_refresh > REFRESH_AT_MOST_EVERY_SECONDS:
@@ -152,4 +160,5 @@ def forget_channels() -> None:
     _channels.clear()
     _owners.clear()
     _off.clear()
+    _known.clear()
     _last_refresh = 0.0

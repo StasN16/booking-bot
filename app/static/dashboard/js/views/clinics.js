@@ -6,7 +6,7 @@
 import { api } from '../api.js';
 import { fmt, t } from '../i18n.js';
 import {
-  badge, busy, confirmDialog, errorBox, field, fill, h, icon, ltr, modal, notice, spinner, timeSelect, toast, toggle, uid,
+  badge, busy, confirmDialog, empty, errorBox, field, fill, h, icon, ltr, modal, notice, spinner, timeSelect, toast, toggle, uid,
 } from '../ui.js';
 
 const PHONE_NUMBER_ID = /^\d{5,30}$/;
@@ -34,6 +34,12 @@ export default function clinicsView(container, params, ctx) {
   }
 
   function draw() {
+    if (!ctx.clinics.length) {
+      // A new server: nothing to show until the first clinic is added.
+      fill(list, empty(t('clinics.none'),
+        h('button', { class: 'btn btn-primary', type: 'button', onclick: () => editClinic(null) }, t('clinics.add'))));
+      return;
+    }
     fill(list, ctx.clinics.map(card));
   }
 
