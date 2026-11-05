@@ -1,9 +1,13 @@
+import hashlib
+import hmac
+import json
+import logging
 from collections import OrderedDict
+
 from fastapi import APIRouter, BackgroundTasks, Request, HTTPException, Query
 from app.config import settings
 from app.core import tenancy
 from app.services.conversation import handle_message
-import logging
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -12,6 +16,25 @@ router = APIRouter()
 # slow first attempt. Without this, one customer message books twice.
 MAX_REMEMBERED_MESSAGES = 1000
 _seen_message_ids = OrderedDict()
+
+
+def signed_by_meta(body: bytes, signature: str | None) -> bool:
+    """
+    Whether Meta sent this body: it signs every webhook with the app's
+    secret (X-Hub-Signature-256). Online the address is public, and without
+    this anyone could post a made-up message and have the bot answer it,
+    from the clinic's number, to a number of their choosing.
+
+    With no secret set there is nothing to check against, as on a machine
+    used for development; the server warns about it when it starts.
+    """
+    secret = settings.WHATSAPP_APP_SECRET
+    if not secret:
+        return True
+    if not signature or not signature.startswith("sha256="):
+        return False
+    expected = hmac.new(secret.encode(), body, hashlib.sha256).hexdigest()
+    return hmac.compare_digest(signature.removeprefix("sha256="), expected)
 
 
 def already_processed(message_id: str) -> bool:
@@ -66,7 +89,10 @@ async def verify_webhook(
     hub_challenge: str = Query(None, alias="hub.challenge")
 ):
     """Meta calls this to verify your webhook URL is real"""
-    if hub_mode == "subscribe" and hub_verify_token == settings.WHATSAPP_VERIFY_TOKEN:
+    expected = settings.WHATSAPP_VERIFY_TOKEN
+    if (hub_mode == "subscribe" and expected and hub_verify_token
+            and hmac.compare_digest(hub_verify_token, expected)
+            and (hub_challenge or "").isdigit()):
         logger.info("Webhook verified successfully")
         return int(hub_challenge)
     raise HTTPException(status_code=403, detail="Verification failed")
@@ -75,8 +101,13 @@ async def verify_webhook(
 @router.post("/webhook")
 async def receive_message(request: Request, background_tasks: BackgroundTasks):
     """Meta calls this when a WhatsApp message is received"""
+    raw = await request.body()
+    if not signed_by_meta(raw, request.headers.get("X-Hub-Signature-256")):
+        # Not from Meta, or WHATSAPP_APP_SECRET is not this app's secret.
+        logger.warning("Webhook refused: not signed with WHATSAPP_APP_SECRET")
+        raise HTTPException(status_code=403, detail="Bad signature")
     try:
-        body = await request.json()
+        body = json.loads(raw)
     except Exception:
         logger.warning("Webhook received a body that was not valid JSON")
         return {"status": "ok"}

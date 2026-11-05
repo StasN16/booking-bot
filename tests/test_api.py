@@ -745,3 +745,64 @@ class TestClinicSignIn:
                                json={"current_password": "correct-horse", "new_password": "something-new"},
                                headers={"Authorization": f"Bearer {token}"})
         assert response.status_code == 400
+
+
+class TestVisitorAddressBehindAProxy:
+    """Failed sign-ins are counted per visitor, also behind Render's proxy."""
+
+    def request(self, headers=None, host="10.0.0.7"):
+        from types import SimpleNamespace
+        from starlette.datastructures import Headers
+        return SimpleNamespace(headers=Headers(headers or {}), client=SimpleNamespace(host=host))
+
+    def test_without_a_proxy_it_is_the_connection(self, monkeypatch):
+        from app.api.v1.auth import client_key
+        monkeypatch.setattr(settings, "CLIENT_IP_HEADER", "")
+        assert client_key(self.request({"CF-Connecting-IP": "1.2.3.4"})) == "10.0.0.7"
+
+    def test_behind_the_proxy_it_is_the_header_the_proxy_sets(self, monkeypatch):
+        from app.api.v1.auth import client_key
+        monkeypatch.setattr(settings, "CLIENT_IP_HEADER", "CF-Connecting-IP")
+        assert client_key(self.request({"CF-Connecting-IP": "1.2.3.4"})) == "1.2.3.4"
+
+    def test_a_forwarded_for_chain_the_visitor_wrote_is_ignored(self, monkeypatch):
+        from app.api.v1.auth import client_key
+        monkeypatch.setattr(settings, "CLIENT_IP_HEADER", "CF-Connecting-IP")
+        headers = {"X-Forwarded-For": "6.6.6.6, 1.2.3.4", "CF-Connecting-IP": "1.2.3.4"}
+        assert client_key(self.request(headers)) == "1.2.3.4"
+
+    def test_a_missing_header_falls_back_to_the_connection(self, monkeypatch):
+        from app.api.v1.auth import client_key
+        monkeypatch.setattr(settings, "CLIENT_IP_HEADER", "CF-Connecting-IP")
+        assert client_key(self.request({})) == "10.0.0.7"
+
+
+class TestDatabaseAddress:
+    """The address is accepted however Supabase or a host writes it."""
+
+    @pytest.mark.parametrize("pasted", [
+        "postgres://user:pw@host:5432/postgres",
+        "postgresql://user:pw@host:5432/postgres",
+        "postgresql+asyncpg://user:pw@host:5432/postgres",
+        "  postgresql://user:pw@host:5432/postgres\n",
+    ])
+    def test_it_always_names_the_asyncpg_driver(self, pasted):
+        from app.config import Settings
+        assert Settings(DATABASE_URL=pasted).DATABASE_URL == "postgresql+asyncpg://user:pw@host:5432/postgres"
+
+
+class TestApiDocsSwitch:
+    def test_online_the_api_page_can_be_switched_off(self, monkeypatch):
+        import importlib
+        from fastapi.testclient import TestClient
+        from app import main
+        monkeypatch.setattr(settings, "API_DOCS", False)
+        try:
+            app = importlib.reload(main).app
+            client = TestClient(app)
+            assert client.get("/docs").status_code == 404
+            assert client.get("/openapi.json").status_code == 404
+            assert client.get("/health").status_code == 200
+        finally:
+            monkeypatch.setattr(settings, "API_DOCS", True)
+            importlib.reload(main)

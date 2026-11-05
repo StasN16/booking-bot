@@ -25,6 +25,19 @@ _failures: dict[str, deque] = {}
 
 
 def client_key(request: Request) -> str:
+    """
+    The visitor's address, which failed sign-ins are counted against.
+
+    Behind a host's proxy (Render) the connection comes from the proxy, a
+    different one each time, so every visitor would share one count. The
+    proxy then names the visitor in a header it always overwrites, which
+    CLIENT_IP_HEADER points at. X-Forwarded-For is never used: its left end
+    is whatever the visitor chose to send.
+    """
+    if settings.CLIENT_IP_HEADER:
+        named = (request.headers.get(settings.CLIENT_IP_HEADER) or "").strip()
+        if named:
+            return named
     return request.client.host if request.client else "unknown"
 
 

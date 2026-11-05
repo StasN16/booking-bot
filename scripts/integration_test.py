@@ -211,6 +211,7 @@ async def main():
     await check_audit_trail(treatment)
     await check_dashboard_api(treatment)
     await check_two_clinics()
+    await check_tables_closed()
     return summarize()
 
 
@@ -585,6 +586,21 @@ async def check_dashboard_api(treatment):
 
     finally:
         await cleanup([booked_id])
+
+
+async def check_tables_closed():
+    """
+    Every table refuses Supabase's public data API (row level security, no
+    policies). A table added without it would be readable by anyone holding
+    the project's published key.
+    """
+    from sqlalchemy import text
+    async with booking.async_session() as s:
+        open_tables = (await s.execute(text("""
+            SELECT c.relname FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+            WHERE n.nspname = 'public' AND c.relkind = 'r' AND NOT c.relrowsecurity
+            ORDER BY 1"""))).scalars().all()
+    check("every table is closed to the public data API", not open_tables, ", ".join(open_tables))
 
 
 async def check_two_clinics():

@@ -67,6 +67,10 @@ async def audit_loop():
 async def lifespan(app: FastAPI):
     tasks = []
 
+    if not settings.WHATSAPP_APP_SECRET:
+        logger.warning("WHATSAPP_APP_SECRET is not set: the webhook takes messages without "
+                       "checking they come from Meta. Set it on any server the internet can reach.")
+
     # Which WhatsApp number belongs to which clinic. Messages still find
     # their clinic if this fails now, by loading the numbers on demand.
     try:
@@ -95,7 +99,11 @@ async def lifespan(app: FastAPI):
         logger.info("Background loops stopped")
 
 
-app = FastAPI(title="Booking Bot", version="0.1.0", lifespan=lifespan)
+# The interactive API page lists every endpoint; online nobody needs it.
+docs = settings.API_DOCS
+app = FastAPI(title="Booking Bot", version="0.1.0", lifespan=lifespan,
+              docs_url="/docs" if docs else None, redoc_url="/redoc" if docs else None,
+              openapi_url="/openapi.json" if docs else None)
 
 app.include_router(webhook.router, prefix="/api/v1")
 app.include_router(tasks.router, prefix="/api/v1")
