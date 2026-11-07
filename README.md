@@ -156,6 +156,31 @@ Starter server (about $7 a month) in Frankfurt, next to the Supabase
 database. `render.yaml` describes that server, and Render builds it from
 the file.
 
+### With the helper (one command on the Mac)
+
+1. Sign in at render.com with GitHub, and add a payment card (Billing).
+2. Open your Supabase project. If it says *Paused*, press **Restore**.
+3. In Terminal:
+
+   ```bash
+   cd ~/booking-bot
+   git pull
+   ./scripts/go_online.sh
+   ```
+
+It checks every value before it goes in: the database answers, Meta
+recognizes the token and the App secret, and the token does not expire. It
+asks for a new owner password and puts each value on the clipboard to paste
+into Render's Blueprint page. Then it waits for the server to start, checks
+it holds the same settings, points WhatsApp's webhook at it, and makes sure
+a clinic answers the WhatsApp number. Typing is hidden and nothing typed is
+saved.
+
+Stopped before the end? Once Render shows the service **Live**:
+`./scripts/go_online.sh https://<your address>` does the rest.
+
+The same, by hand:
+
 ### Before you start
 
 1. **Supabase.** Open your project. If it says *Paused*, press **Restore**.
@@ -183,8 +208,8 @@ the file.
    | `WHATSAPP_APP_SECRET` | Meta, step 2 above |
    | `OPENAI_API_KEY`, `WHATSAPP_TOKEN`, `WHATSAPP_VERIFY_TOKEN`, `WHATSAPP_PHONE_ID`, `BUSINESS_ID`, `CLINIC_START_PASSWORD` | `.env` on your Mac |
 
-4. **Apply.** After a few minutes the service shows **Live**, with its
-   address, such as `https://booking-bot-xxxx.onrender.com`.
+4. **Deploy Blueprint.** After a few minutes the service shows **Live**,
+   with its address, such as `https://booking-bot-xxxx.onrender.com`.
 
 ### Point WhatsApp at it
 
@@ -245,6 +270,7 @@ poetry run python scripts/configure.py --check
 | `scripts/start_password.py` | Sets the password new clinic users start with; `--everyone` gives it to existing users too. |
 | `scripts/setup_local_db.py` | Creates the local database, applies migrations and adds the demo clinic. |
 | `scripts/migrate_supabase.py` | Applies migrations to Supabase without touching `.env`. |
+| `scripts/go_online.sh` | Puts the bot online on Render: checks every value, copies each to paste in, then connects WhatsApp to the new server. With an address, only that last part. |
 | `scripts/integration_test.py` | Runs the full booking flow and the dashboard API against a real database, then cleans up. |
 | `scripts/analyze_audit.py` | Reports problems in the audit trail. `--show TRACE_ID` shows one conversation step by step. |
 
