@@ -1,3 +1,4 @@
+from pydantic import field_validator
 from pydantic_settings import BaseSettings
 
 class Settings(BaseSettings):
@@ -41,8 +42,38 @@ class Settings(BaseSettings):
     WHATSAPP_APP_SECRET: str = ""
     WHATSAPP_PHONE_ID: str = ""
     REDIS_URL: str = "redis://localhost:6379"
+    # Dashboard sign-in. JWT_SECRET signs the tokens; leaving either of
+    # these blank keeps the API shut rather than open.
     JWT_SECRET: str = ""
+    ADMIN_PASSWORD: str = ""
+    JWT_HOURS: int = 12
+    # The password a clinic user is given (a new user, or New password on
+    # the Clinics page). It is only a start: the user must choose their own
+    # at first sign-in. Blank gives each one a random password instead.
+    CLINIC_START_PASSWORD: str = ""
     SENTRY_DSN: str = ""
+
+    # Online, behind the host's proxy: the header that proxy sets to the
+    # visitor's address and always overwrites (CF-Connecting-IP on Render).
+    # Failed sign-ins are counted per visitor by it. Blank: the address of
+    # the connection itself, right when nothing stands in between.
+    CLIENT_IP_HEADER: str = ""
+    # The interactive API page at /docs. Off online, where nobody needs it.
+    API_DOCS: bool = True
+
+    @field_validator("DATABASE_URL")
+    @classmethod
+    def asyncpg_driver(cls, value: str) -> str:
+        """
+        Supabase and hosting dashboards hand out postgres:// or postgresql://
+        addresses. The app reaches PostgreSQL through asyncpg, so it is named
+        here, however the address was pasted.
+        """
+        value = value.strip()
+        for prefix in ("postgres://", "postgresql://"):
+            if value.startswith(prefix):
+                return "postgresql+asyncpg://" + value[len(prefix):]
+        return value
 
     class Config:
         env_file = ".env"

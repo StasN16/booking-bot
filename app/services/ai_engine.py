@@ -138,11 +138,13 @@ def describe_booking(booking: dict) -> str:
     )
 
 
-async def process_message(message_text: str, conversation_history: list = None, current_state: str = "idle", clinic_data: str = "", therapist_data: str = "", booking_context: dict = None) -> dict:
+async def process_message(message_text: str, conversation_history: list = None, current_state: str = "idle", clinic_data: str = "", therapist_data: str = "", booking_context: dict = None, business_data: str = "") -> dict:
     """Send message to GPT-4o and get structured response"""
     try:
         # Build system prompt with real clinic data
         full_prompt = SYSTEM_PROMPT
+        if business_data:
+            full_prompt += f"\n\nTHE CLINIC YOU WORK AT (when asked where, what number or when, answer from this):\n{business_data}"
         if clinic_data:
             full_prompt += f"\n\nCLINIC DATA (use ONLY these treatments and prices):\n{clinic_data}"
         if therapist_data:

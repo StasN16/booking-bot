@@ -1,21 +1,35 @@
 import httpx
 import asyncio
 from app.config import settings
-from app.core import audit
+from app.core import audit, tenancy
 import logging
 
 logger = logging.getLogger(__name__)
 
 WHATSAPP_API_URL = "https://graph.facebook.com/v18.0"
 
+
+def endpoint() -> tuple[str, dict] | None:
+    """
+    Where to send for the clinic being served: its own number and token.
+    None when the clinic has no WhatsApp number set up yet.
+    """
+    line = tenancy.channel()
+    if line is None:
+        return None
+    return (
+        f"{WHATSAPP_API_URL}/{line.phone_id}/messages",
+        {"Authorization": f"Bearer {line.token}", "Content-Type": "application/json"},
+    )
+
+
 async def send_typing_indicator(to_number: str):
     """Send 'typing...' indicator to customer"""
     try:
-        url = f"{WHATSAPP_API_URL}/{settings.WHATSAPP_PHONE_ID}/messages"
-        headers = {
-            "Authorization": f"Bearer {settings.WHATSAPP_TOKEN}",
-            "Content-Type": "application/json"
-        }
+        target = endpoint()
+        if target is None:
+            return
+        url, headers = target
         payload = {
             "messaging_product": "whatsapp",
             "recipient_type": "individual",
@@ -36,13 +50,16 @@ async def send_message(to_number: str, message: str) -> bool:
         if settings.REPLY_DELAY_SECONDS > 0:
             await asyncio.sleep(settings.REPLY_DELAY_SECONDS)
 
-        url = f"{WHATSAPP_API_URL}/{settings.WHATSAPP_PHONE_ID}/messages"
-        
-        headers = {
-            "Authorization": f"Bearer {settings.WHATSAPP_TOKEN}",
-            "Content-Type": "application/json"
-        }
-        
+        target = endpoint()
+        if target is None:
+            # A clinic added before its WhatsApp number cannot message anyone,
+            # and must never borrow another clinic's number to do it.
+            logger.error(f"Clinic {tenancy.current_business_id()} has no WhatsApp number set up")
+            audit.record("whatsapp.api_call", inputs={"to": audit.mask_phone(to_number)},
+                         error="this clinic has no WhatsApp number set up")
+            return False
+        url, headers = target
+
         payload = {
             "messaging_product": "whatsapp",
             "recipient_type": "individual",

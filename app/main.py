@@ -1,11 +1,27 @@
 import asyncio
+import hashlib
 import logging
+import time
 from contextlib import asynccontextmanager
+from pathlib import Path
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
+from fastapi.responses import RedirectResponse
+from fastapi.staticfiles import StaticFiles
 
 from app.config import settings
-from app.api.v1 import tasks, webhook
+from app.core import tenancy
+from app.api.v1 import (
+    appointments,
+    auth,
+    business,
+    customers,
+    platform,
+    tasks,
+    therapists,
+    treatments,
+    webhook,
+)
 from app.services import audit_watch
 from app.services.reminders import send_due_reminders
 
@@ -51,6 +67,17 @@ async def audit_loop():
 async def lifespan(app: FastAPI):
     tasks = []
 
+    if not settings.WHATSAPP_APP_SECRET:
+        logger.warning("WHATSAPP_APP_SECRET is not set: the webhook takes messages without "
+                       "checking they come from Meta. Set it on any server the internet can reach.")
+
+    # Which WhatsApp number belongs to which clinic. Messages still find
+    # their clinic if this fails now, by loading the numbers on demand.
+    try:
+        await tenancy.refresh_channels()
+    except Exception as e:
+        logger.warning(f"Could not load the clinics' WhatsApp numbers yet: {e}")
+
     if settings.REMINDERS_ENABLED:
         tasks.append(asyncio.create_task(reminder_loop()))
     else:
@@ -72,15 +99,86 @@ async def lifespan(app: FastAPI):
         logger.info("Background loops stopped")
 
 
-app = FastAPI(title="Booking Bot", version="0.1.0", lifespan=lifespan)
+# The interactive API page lists every endpoint; online nobody needs it.
+docs = settings.API_DOCS
+app = FastAPI(title="Booking Bot", version="0.1.0", lifespan=lifespan,
+              docs_url="/docs" if docs else None, redoc_url="/redoc" if docs else None,
+              openapi_url="/openapi.json" if docs else None)
 
 app.include_router(webhook.router, prefix="/api/v1")
 app.include_router(tasks.router, prefix="/api/v1")
 
+# Management API for the dashboard. Every router except auth requires a
+# token, declared on the router so a new endpoint cannot forget it.
+app.include_router(auth.router, prefix="/api/v1")
+app.include_router(appointments.router, prefix="/api/v1")
+app.include_router(therapists.router, prefix="/api/v1")
+app.include_router(treatments.router, prefix="/api/v1")
+app.include_router(customers.router, prefix="/api/v1")
+app.include_router(business.router, prefix="/api/v1")
+# The owner's side: clinics, their numbers and logins.
+app.include_router(platform.router, prefix="/api/v1")
 
-@app.get("/")
+
+# --- dashboard ---------------------------------------------------------------
+
+DASHBOARD_DIR = Path(__file__).resolve().parent / "static" / "dashboard"
+
+# Scripts and styles only from this server. Customer names and notes are
+# shown on the dashboard and can originate outside the clinic, so even if
+# one slipped past escaping, the browser would refuse to run it.
+DASHBOARD_HEADERS = {
+    "Content-Security-Policy": (
+        "default-src 'self'; script-src 'self'; style-src 'self'; "
+        "img-src 'self' data:; connect-src 'self'; font-src 'self'; "
+        "frame-ancestors 'none'; base-uri 'self'; form-action 'self'"
+    ),
+    "X-Content-Type-Options": "nosniff",
+    "Referrer-Policy": "no-referrer",
+    # Revalidate every load, so a dashboard updated by `git pull` is the one
+    # the browser shows. Unchanged files still answer 304, so this is cheap.
+    "Cache-Control": "no-cache",
+}
+
+
+_version = {"checked_at": float("-inf"), "value": ""}
+VERSION_CHECK_EVERY_SECONDS = 5.0
+
+
+def dashboard_version() -> str:
+    """
+    Which dashboard files the server has, as a short fingerprint. A page
+    left open through `git pull` keeps running the old files; seeing the
+    fingerprint change on an API answer tells it to load the new ones.
+    """
+    now = time.monotonic()
+    if now - _version["checked_at"] >= VERSION_CHECK_EVERY_SECONDS:
+        digest = hashlib.sha1()
+        for path in sorted(DASHBOARD_DIR.rglob("*")):
+            if path.is_file():
+                stat = path.stat()
+                digest.update(f"{path.relative_to(DASHBOARD_DIR)}:{stat.st_size}:{stat.st_mtime_ns}\n".encode())
+        _version.update(checked_at=now, value=digest.hexdigest()[:12])
+    return _version["value"]
+
+
+@app.middleware("http")
+async def dashboard_headers(request: Request, call_next):
+    response = await call_next(request)
+    if request.url.path.startswith("/dashboard"):
+        for name, value in DASHBOARD_HEADERS.items():
+            response.headers[name] = value
+    elif request.url.path.startswith("/api/"):
+        response.headers["X-Dashboard-Version"] = dashboard_version()
+    return response
+
+
+app.mount("/dashboard", StaticFiles(directory=DASHBOARD_DIR, html=True), name="dashboard")
+
+
+@app.get("/", include_in_schema=False)
 async def root():
-    return {"status": "ok", "message": "Bot is running!"}
+    return RedirectResponse("/dashboard/")
 
 
 @app.get("/health")

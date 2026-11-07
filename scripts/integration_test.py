@@ -18,6 +18,7 @@ from datetime import date, timedelta
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
 
 from sqlalchemy import select
+from app.config import settings
 from app.services import availability, booking
 from app.core.models.business import Business
 
@@ -44,10 +45,10 @@ async def main():
         db_ids = [str(b.id) for b in rows]
 
     print(f"business rows in DB : {db_ids}")
-    print(f"hardcoded BUSINESS_ID: {availability.BUSINESS_ID}")
+    print(f"hardcoded BUSINESS_ID: {settings.BUSINESS_ID}")
     check(
         "hardcoded BUSINESS_ID matches a real business row",
-        availability.BUSINESS_ID in db_ids,
+        settings.BUSINESS_ID in db_ids,
         "services filter every query by this id",
     )
 
@@ -172,8 +173,10 @@ async def main():
         check("booked time round-trips unchanged", slot["time"] in listed_times,
               f"booked {slot['time']}, listing shows {listed_times}")
 
-        # Reschedule to a later free slot.
-        later = [s for s in after if s["therapist_id"] == slot["therapist_id"]]
+        # Reschedule to a later free slot, as free now: the bookings above
+        # took some times since `after` was read.
+        now_free = await availability.get_available_slots(treatment["id"], target)
+        later = [s for s in now_free if s["therapist_id"] == slot["therapist_id"]]
         if later:
             new_slot = later[-1]
             resc = await booking.reschedule_appointment(
@@ -186,6 +189,7 @@ async def main():
                   f"{slot['time']} -> {new_slot['time']} : {resc}")
 
         # Cancel.
+        before_cancel = await availability.get_available_slots(treatment["id"], target)
         canc = await booking.cancel_appointment(TEST_PHONE, appointment_id=appt_id)
         check("cancel_appointment() succeeds", canc.get("success"), str(canc))
 
@@ -196,8 +200,8 @@ async def main():
 
         # Cancelled slot frees up again.
         freed = await availability.get_available_slots(treatment["id"], target)
-        check("cancelling frees the slot", len(freed) > len(after),
-              f"{len(after)} -> {len(freed)} slots")
+        check("cancelling frees the slot", len(freed) > len(before_cancel),
+              f"{len(before_cancel)} -> {len(freed)} slots")
 
         # Cleanup
         await cleanup([appt_id, amb_id, dup.get("appointment_id")])
@@ -205,6 +209,9 @@ async def main():
     await check_reminders(treatment)
     await check_session_persistence()
     await check_audit_trail(treatment)
+    await check_dashboard_api(treatment)
+    await check_two_clinics()
+    await check_tables_closed()
     return summarize()
 
 
@@ -400,7 +407,7 @@ async def check_reminders(treatment):
             customer = res.scalar_one_or_none()
             if not customer:
                 customer = Customer(
-                    id=uuid.uuid4(), business_id=reminders.BUSINESS_ID,
+                    id=uuid.uuid4(), business_id=settings.BUSINESS_ID,
                     phone=TEST_PHONE, language="he", conversation_state="idle",
                 )
                 s.add(customer)
@@ -411,10 +418,16 @@ async def check_reminders(treatment):
             from app.core.models.therapist import Therapist
             therapist = (await s.execute(select(Therapist))).scalars().first()
 
+            # The reminder run below is told it is ten years from now, so it
+            # finds this appointment and nothing else. Run at today's date it
+            # would also pick up every real appointment that happens to be
+            # due, and with WhatsApp stubbed out their reminders would be
+            # marked sent without ever reaching the customer.
+            virtual_now = clinic_now() + timedelta(days=3653)
             # Placed squarely inside the 24 hour window.
-            start = clinic_now() + timedelta(hours=23)
+            start = virtual_now + timedelta(hours=23)
             appt = Appointment(
-                id=uuid.uuid4(), business_id=reminders.BUSINESS_ID,
+                id=uuid.uuid4(), business_id=settings.BUSINESS_ID,
                 customer_id=customer.id, therapist_id=therapist.id,
                 treatment_id=treatment["id"], start_time=start,
                 end_time=start + timedelta(minutes=60), status="confirmed",
@@ -424,7 +437,7 @@ async def check_reminders(treatment):
             await s.commit()
             appt_id = appt.id
 
-        result = await reminders.send_due_reminders()
+        result = await reminders.send_due_reminders(now=virtual_now)
         check("24h reminder is sent for an appointment 23h away",
               result["sent"]["24h"] == 1, str(result["sent"]))
 
@@ -436,7 +449,7 @@ async def check_reminders(treatment):
               bool(sent) and sent[0][0] == TEST_PHONE)
 
         before = len(sent)
-        again = await reminders.send_due_reminders()
+        again = await reminders.send_due_reminders(now=virtual_now)
         check("running again does not send a duplicate",
               again["total"] == 0 and len(sent) == before,
               f"second run sent {again['total']}")
@@ -455,6 +468,364 @@ async def check_reminders(treatment):
                     await s.delete(row)
                 await s.commit()
         await cleanup([])
+
+
+async def check_dashboard_api(treatment):
+    """The endpoints the dashboard relies on, called against the real database."""
+    print()
+    print("=" * 70)
+    print("DASHBOARD API")
+    print("=" * 70)
+
+    from fastapi import HTTPException
+    from app.api.v1 import appointments as api
+    from app.api.v1 import business as business_api
+    from app.core.schemas.api import AppointmentIn, AppointmentNotes
+    from app.core.timeutils import now as clinic_now
+
+    # A number typed the way a person would, Israeli local format.
+    typed_phone = "050-000-0999"
+    booked_id = None
+
+    try:
+        day = clinic_now().date() + timedelta(days=1)
+        for _ in range(10):
+            free = await api.availability(treatment_id=treatment["id"], date=day.isoformat())
+            if free["slots"]:
+                break
+            day += timedelta(days=1)
+        check("availability offers slots on a working day", bool(free["slots"]),
+              f"{day}: {len(free['slots'])} slots")
+        slot = free["slots"][0]
+
+        created = await api.book_appointment(AppointmentIn(
+            customer_phone=typed_phone, customer_name="Dashboard Test",
+            treatment_name=treatment["name"], therapist_name=slot["therapist_name"],
+            date=day.isoformat(), time=slot["time"], notes="first visit"))
+        booked_id = created["id"]
+        check("a typed local number is stored the way WhatsApp sends it",
+              created["customer_phone"] == TEST_PHONE, created["customer_phone"])
+        check("the name typed by the clinic is saved",
+              created["customer_name"] == "Dashboard Test")
+        check("the note is saved", created["notes"] == "first visit")
+        check("ids and duration come back for the calendar",
+              created["treatment_id"] == treatment["id"]
+              and created["duration_minutes"] == treatment["duration_minutes"])
+
+        after = await api.availability(treatment_id=treatment["id"], date=day.isoformat(),
+                                       therapist_id=slot["therapist_id"])
+        times = [s["time"] for s in after["slots"]]
+        check("the booked time is no longer offered for that therapist",
+              slot["time"] not in times, slot["time"])
+
+        moving = await api.availability(treatment_id=treatment["id"], date=day.isoformat(),
+                                        therapist_id=slot["therapist_id"],
+                                        exclude_appointment_id=booked_id)
+        check("excluding the booking offers its own time again, for moving it",
+              slot["time"] in [s["time"] for s in moving["slots"]])
+
+        past = await api.availability(treatment_id=treatment["id"], date="2020-01-01")
+        check("a past date offers nothing", past["slots"] == [])
+
+        edited = await api.edit_notes(booked_id, AppointmentNotes(notes="prefers firm pressure"))
+        check("notes can be edited", edited["notes"] == "prefers firm pressure")
+        cleared = await api.edit_notes(booked_id, AppointmentNotes(notes="   "))
+        check("blank notes are cleared", cleared["notes"] is None)
+
+        by_phone = await api.list_appointments(customer_phone=typed_phone, from_date=None,
+                                               to_date=None, status=None, therapist_id=None,
+                                               limit=50)
+        check("filtering by a typed number finds the customer's history",
+              any(a["id"] == booked_id for a in by_phone), f"{len(by_phone)} found")
+
+        # A month on the calendar must not cost a query per appointment.
+        from sqlalchemy import event
+        from app.core.db import engine
+        statements = []
+
+        def count(*args):
+            statements.append(1)
+
+        event.listen(engine.sync_engine, "before_cursor_execute", count)
+        try:
+            listed = await api.list_appointments(
+                from_date=(day - timedelta(days=60)).isoformat(),
+                to_date=(day + timedelta(days=60)).isoformat(),
+                status=None, therapist_id=None, customer_phone=None, limit=1000)
+        finally:
+            event.remove(engine.sync_engine, "before_cursor_execute", count)
+        check("listing appointments costs the same few queries however many there are",
+              len(statements) <= 4, f"{len(listed)} appointments, {len(statements)} queries")
+
+        from app.api.v1 import therapists as therapists_api
+        team = await therapists_api.list_therapists(include_inactive=True)
+        check("therapists say when they joined, so their colours stay put",
+              all(t["created_at"] for t in team), f"{len(team)} therapists")
+
+        stats = await api.statistics(from_date=day.isoformat(), to_date=day.isoformat())
+        today_row = stats["by_day"][0] if stats["by_day"] else {}
+        check("statistics count the booking per day",
+              len(stats["by_day"]) == 1 and today_row.get("appointments", 0) >= 1,
+              str(today_row))
+        check("revenue is the treatment's price",
+              stats["revenue"] >= treatment["price"], f"{stats['revenue']}")
+
+        wide = await api.statistics(from_date="2027-01-01", to_date="2027-01-31")
+        check("every day of a range is present, with zeros", len(wide["by_day"]) == 31)
+
+        try:
+            await api.statistics(from_date="2025-01-01", to_date="2027-01-01")
+            check("an over-long range is refused", False)
+        except HTTPException as e:
+            check("an over-long range is refused", e.status_code == 400)
+
+        info = await business_api.get_business()
+        check("business details load", bool(info["name"]), info["name"])
+        check("business details carry no WhatsApp credentials",
+              not any(k.startswith("whatsapp") for k in info))
+
+    finally:
+        await cleanup([booked_id])
+
+
+async def check_tables_closed():
+    """
+    Every table refuses Supabase's public data API (row level security, no
+    policies). A table added without it would be readable by anyone holding
+    the project's published key.
+    """
+    from sqlalchemy import text
+    async with booking.async_session() as s:
+        open_tables = (await s.execute(text("""
+            SELECT c.relname FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+            WHERE n.nspname = 'public' AND c.relkind = 'r' AND NOT c.relrowsecurity
+            ORDER BY 1"""))).scalars().all()
+    check("every table is closed to the public data API", not open_tables, ", ".join(open_tables))
+
+
+async def check_two_clinics():
+    """
+    A second clinic on the same server, driven through the real app as the
+    dashboard and WhatsApp would: its own login, team, treatments,
+    appointments and number, and none of the first clinic's.
+    """
+    print()
+    print("=" * 70)
+    print("TWO CLINICS ON ONE SERVER")
+    print("=" * 70)
+
+    import uuid
+    import httpx
+    from app.core import tenancy
+    from app.core.models.appointment import Appointment
+    from app.core.models.customer import Customer
+    from app.core.timeutils import now as clinic_now
+    from app.dependencies import issue_token
+    from app.main import app
+    from app.services import reminders
+
+    if not settings.JWT_SECRET:
+        check("two clinics: JWT_SECRET is set, to sign in", False, "run scripts/configure.py")
+        return
+
+    owner = {"Authorization": f"Bearer {issue_token()['access_token']}"}
+    # A WhatsApp number id no real clinic has.
+    number = "99" + str(uuid.uuid4().int)[:12]
+    second = None
+
+    try:
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app),
+                                     base_url="http://test") as client:
+            r = await client.post("/api/v1/platform/clinics", headers=owner, json={
+                "name": "Integration Test Clinic", "phone": "0500000000",
+                "whatsapp_phone_id": number,
+                "working_hours_start": "08:00", "working_hours_end": "22:00"})
+            check("the owner can add a clinic", r.status_code == 201, r.text[:150])
+            if r.status_code != 201:
+                return
+            second = r.json()["id"]
+            as_second = {**owner, "X-Business-Id": second}
+
+            r = await client.post("/api/v1/platform/clinics", headers=owner, json={
+                "name": "Same Number Clinic", "phone": "0500000001", "whatsapp_phone_id": number})
+            check("no two clinics can share a WhatsApp number", r.status_code == 409, str(r.status_code))
+
+            everyday = "Sunday,Monday,Tuesday,Wednesday,Thursday,Friday,Saturday"
+            r = await client.post("/api/v1/therapists", headers=as_second, json={
+                "name": "Test Therapist B", "working_days": everyday,
+                "working_hours_start": "08:00", "working_hours_end": "22:00"})
+            check("the owner can give it a team", r.status_code == 201, r.text[:150])
+            r = await client.post("/api/v1/treatments", headers=as_second, json={
+                "name": "Test Treatment B", "duration_minutes": 30, "price": 100})
+            check("and treatments", r.status_code == 201, r.text[:150])
+            treatment_b = r.json()
+
+            email = f"integration-{second[:8]}@example.com"
+            r = await client.post(f"/api/v1/platform/clinics/{second}/logins", headers=owner,
+                                  json={"email": email, "name": "Integration"})
+            given = r.json().get("password", "") if r.status_code == 201 else ""
+            check("and a user, with the start password or a random one to pass on",
+                  given == settings.CLINIC_START_PASSWORD if settings.CLINIC_START_PASSWORD else len(given) >= 12,
+                  str(r.status_code))
+            login_id, password = r.json()["login"]["id"], given
+
+            r = await client.post("/api/v1/auth/login", json={"email": email.upper(), "password": password})
+            # The status only: the body holds a live token, which has no place in a log.
+            check("the clinic signs in with its email, however it is typed", r.status_code == 200, str(r.status_code))
+            clinic = {"Authorization": f"Bearer {r.json()['access_token']}"}
+
+            me = (await client.get("/api/v1/auth/me", headers=clinic)).json()
+            check("it is told which clinic it is", me.get("business_id") == second, str(me))
+            check("and that it must choose its own password", me.get("must_change_password") is True, str(me))
+            r = await client.get("/api/v1/therapists", headers=clinic)
+            check("until it does, it sees nothing", r.status_code == 403, str(r.status_code))
+            own = f"own-{uuid.uuid4().hex[:12]}"
+            r = await client.post("/api/v1/auth/password", headers=clinic,
+                                  json={"current_password": password, "new_password": password})
+            check("keeping the given password is refused", r.status_code == 400, str(r.status_code))
+            r = await client.post("/api/v1/auth/password", headers=clinic,
+                                  json={"current_password": password, "new_password": own})
+            me = (await client.get("/api/v1/auth/me", headers=clinic)).json()
+            check("once it chooses one, it is in", r.status_code == 200 and me.get("must_change_password") is False,
+                  str(r.status_code))
+
+            team = [t["name"] for t in (await client.get("/api/v1/therapists", headers=clinic)).json()]
+            check("a clinic sees only its own team", team == ["Test Therapist B"], str(team))
+            offered = [t["name"] for t in (await client.get("/api/v1/treatments", headers=clinic)).json()]
+            check("and only its own treatments", offered == ["Test Treatment B"], str(offered))
+
+            day = (clinic_now().date() + timedelta(days=2)).isoformat()
+            free = (await client.get("/api/v1/availability", headers=clinic,
+                                     params={"treatment_id": treatment_b["id"], "date": day})).json()
+            check("its free times come from its own team",
+                  bool(free.get("slots")) and {s["therapist_name"] for s in free["slots"]} == {"Test Therapist B"},
+                  f"{len(free.get('slots', []))} slots")
+            slot = free["slots"][0]
+            r = await client.post("/api/v1/appointments", headers=clinic, json={
+                "customer_phone": TEST_PHONE, "treatment_name": "Test Treatment B",
+                "therapist_name": slot["therapist_name"], "date": day, "time": slot["time"]})
+            check("it books its own appointments", r.status_code == 201, r.text[:150])
+            booked = r.json()["id"]
+
+            home = (await client.get("/api/v1/appointments", headers=owner,
+                                     params={"from_date": day, "to_date": day})).json()
+            check("the first clinic does not see them", all(a["id"] != booked for a in home))
+            r = await client.get(f"/api/v1/appointments/{booked}", headers=owner)
+            check("nor open one by its id", r.status_code == 404, str(r.status_code))
+
+            r = await client.get("/api/v1/appointments", headers={**clinic, "X-Business-Id": settings.BUSINESS_ID})
+            check("a clinic login cannot ask for another clinic", r.status_code == 403, str(r.status_code))
+            r = await client.get("/api/v1/platform/clinics", headers=clinic)
+            check("nor reach the owner's pages", r.status_code == 403, str(r.status_code))
+
+            found = await tenancy.business_for_phone_number(number)
+            check("a WhatsApp message to its number finds it", found == second, str(found))
+            with tenancy.acting_for(second):
+                bot_offers = [t["name"] for t in await availability.get_treatments()]
+            check("and the bot there offers its treatments only", bot_offers == ["Test Treatment B"], str(bot_offers))
+
+            # Reminders go out from the clinic's own number. Run as if it were
+            # twenty years on, so nothing real is in the window.
+            sent = []
+
+            async def fake_send(phone, text):
+                line = tenancy.channel()
+                sent.append((phone, line.phone_id if line else None))
+                return True
+
+            real_send = reminders.send_message
+            reminders.send_message = fake_send
+            try:
+                later = clinic_now() + timedelta(days=7305)
+                async with booking.async_session() as s:
+                    customer = (await s.execute(select(Customer).where(
+                        Customer.phone == TEST_PHONE, Customer.business_id == uuid.UUID(second)))).scalar_one()
+                    s.add(Appointment(
+                        id=uuid.uuid4(), business_id=uuid.UUID(second), customer_id=customer.id,
+                        therapist_id=uuid.UUID(slot["therapist_id"]), treatment_id=uuid.UUID(treatment_b["id"]),
+                        start_time=later + timedelta(hours=23), end_time=later + timedelta(hours=23, minutes=30),
+                        status="confirmed", reminder_24h_sent=False, reminder_1h_sent=False))
+                    await s.commit()
+                await reminders.send_due_reminders(now=later)
+            finally:
+                reminders.send_message = real_send
+            check("its reminders go out from its own number", sent == [(TEST_PHONE, number)], str(sent))
+
+            # Who does which treatment. Therapist B has nothing ticked: everything.
+            r = await client.post("/api/v1/treatments", headers=clinic, json={
+                "name": "Test Treatment C", "duration_minutes": 30, "price": 120})
+            treatment_c = r.json()
+            r = await client.post("/api/v1/therapists", headers=clinic, json={
+                "name": "Test Therapist C", "working_days": everyday,
+                "working_hours_start": "08:00", "working_hours_end": "22:00",
+                "treatment_ids": [treatment_c["id"]]})
+            check("a team member can do only some treatments",
+                  r.status_code == 201 and r.json().get("treatment_ids") == [treatment_c["id"]], r.text[:150])
+            therapist_c = r.json()
+
+            async def offered(treatment_id):
+                answer = (await client.get("/api/v1/availability", headers=clinic,
+                                           params={"treatment_id": treatment_id, "date": day})).json()
+                return {slot["therapist_name"] for slot in answer.get("slots", [])}
+            for_b, for_c = await offered(treatment_b["id"]), await offered(treatment_c["id"])
+            check("free times offer only who does the treatment",
+                  for_b == {"Test Therapist B"} and for_c == {"Test Therapist B", "Test Therapist C"},
+                  f"B: {sorted(for_b)}, C: {sorted(for_c)}")
+
+            r = await client.post("/api/v1/appointments", headers=clinic, json={
+                "customer_phone": TEST_PHONE, "treatment_name": "Test Treatment B",
+                "therapist_name": "Test Therapist C", "date": day, "time": "21:00"})
+            check("booking someone for a treatment they don't do is refused", r.status_code == 400, r.text[:150])
+
+            with tenancy.acting_for(second):
+                summary = await availability.get_therapists_summary()
+            line_b = next((line for line in summary.splitlines() if "Test Therapist B" in line), "")
+            line_c = next((line for line in summary.splitlines() if "Test Therapist C" in line), "")
+            check("the bot is told who does what",
+                  "כל הטיפולים" in line_b and "Test Treatment C" in line_c and "Test Treatment B" not in line_c,
+                  summary.replace("\n", " | ")[:200])
+
+            home_treatments = (await client.get("/api/v1/treatments", headers=owner)).json()
+            foreign = home_treatments[0]["id"] if home_treatments else str(uuid.uuid4())
+            r = await client.put(f"/api/v1/therapists/{therapist_c['id']}", headers=clinic,
+                                 json={"treatment_ids": [foreign]})
+            check("another clinic's treatment cannot be ticked", r.status_code == 400, str(r.status_code))
+            r = await client.put(f"/api/v1/therapists/{therapist_c['id']}", headers=clinic,
+                                 json={"treatment_ids": []})
+            check("nothing ticked means every treatment again",
+                  r.status_code == 200 and r.json().get("treatment_ids") == [], r.text[:150])
+
+            await client.put(f"/api/v1/platform/logins/{login_id}", headers=owner, json={"is_active": False})
+            r = await client.get("/api/v1/therapists", headers=clinic)
+            check("a login switched off is locked out at once", r.status_code == 401, str(r.status_code))
+
+            r = await client.put(f"/api/v1/platform/clinics/{second}", headers=owner, json={"is_active": False})
+            found = await tenancy.business_for_phone_number(number)
+            check("a clinic turned off answers no WhatsApp messages",
+                  r.status_code == 200 and found is None and tenancy.channel(second) is None, str(found))
+
+    finally:
+        if second:
+            await remove_clinic(second)
+        await tenancy.refresh_channels()
+
+
+async def remove_clinic(business_id):
+    """Delete a test clinic and everything in it."""
+    import uuid
+    from sqlalchemy import delete
+    from app.core.models.appointment import Appointment
+    from app.core.models.customer import Customer
+    from app.core.models.therapist import Therapist
+    from app.core.models.treatment import Treatment
+    from app.core.models.user import User
+
+    key = uuid.UUID(business_id)
+    async with booking.async_session() as s:
+        for model in (Appointment, Customer, User, Therapist, Treatment):
+            await s.execute(delete(model).where(model.business_id == key))
+        await s.execute(delete(Business).where(Business.id == key))
+        await s.commit()
 
 
 async def cleanup(appointment_ids):

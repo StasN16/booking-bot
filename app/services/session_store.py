@@ -15,14 +15,13 @@ import uuid
 
 from sqlalchemy import select
 
-from app.config import settings
 from app.core.db import async_session
+from app.core.tenancy import current_business_id
 from app.core.enums import ConversationState
 from app.core.models.customer import Customer
 
 logger = logging.getLogger(__name__)
 
-BUSINESS_ID = settings.BUSINESS_ID
 
 MAX_HISTORY_MESSAGES = 20
 # Under the column's 5000 so a long booking context cannot push it over.
@@ -91,7 +90,7 @@ async def save(phone: str, state: str, history: list, booking: dict,
         if not customer:
             customer = Customer(
                 id=uuid.uuid4(),
-                business_id=BUSINESS_ID,
+                business_id=current_business_id(),
                 phone=phone,
             )
             session.add(customer)
@@ -121,7 +120,7 @@ async def _get(session, phone: str):
     result = await session.execute(
         select(Customer).where(
             Customer.phone == phone,
-            Customer.business_id == BUSINESS_ID,
+            Customer.business_id == current_business_id(),
         )
     )
     return result.scalar_one_or_none()

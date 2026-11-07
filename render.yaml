@@ -1,0 +1,56 @@
+# The bot and the dashboard online, on Render: one server that never
+# sleeps, in Frankfurt, next to the Supabase database. Created once in
+# Render with New > Blueprint and this repository; after that, every
+# change merged into main goes online by itself. README: "Going online".
+services:
+  - type: web
+    name: booking-bot
+    runtime: python
+    region: frankfurt
+    # Always on. The free plan sleeps when idle, and a sleeping bot misses
+    # WhatsApp messages and reminders.
+    plan: starter
+    branch: main
+    autoDeploy: true
+    buildCommand: poetry install --only main --no-interaction
+    # The database first, then the server. If the database cannot be brought
+    # up to date, the new version never starts and the old one keeps running.
+    # Proxy headers: Render's proxy says the visitor came over https.
+    startCommand: 'poetry run alembic upgrade head && poetry run uvicorn app.main:app --host 0.0.0.0 --port $PORT --proxy-headers --forwarded-allow-ips "*"'
+    healthCheckPath: /health
+    envVars:
+      # The Poetry that wrote poetry.lock; Render's own is older.
+      - key: POETRY_VERSION
+        value: 2.3.2
+      - key: POETRY_VIRTUALENVS_IN_PROJECT
+        value: "true"
+      # Cloudflare, in front of Render, writes the visitor's address here
+      # and overwrites any the visitor sends.
+      - key: CLIENT_IP_HEADER
+        value: CF-Connecting-IP
+      - key: API_DOCS
+        value: "false"
+      - key: TIMEZONE
+        value: Asia/Jerusalem
+      # Signs dashboard sign-ins. Render makes a random one.
+      - key: JWT_SECRET
+        generateValue: true
+      # Asked for when the Blueprint is created, and kept only in Render.
+      - key: DATABASE_URL
+        sync: false
+      - key: ADMIN_PASSWORD
+        sync: false
+      - key: OPENAI_API_KEY
+        sync: false
+      - key: WHATSAPP_TOKEN
+        sync: false
+      - key: WHATSAPP_VERIFY_TOKEN
+        sync: false
+      - key: WHATSAPP_APP_SECRET
+        sync: false
+      - key: WHATSAPP_PHONE_ID
+        sync: false
+      - key: BUSINESS_ID
+        sync: false
+      - key: CLINIC_START_PASSWORD
+        sync: false

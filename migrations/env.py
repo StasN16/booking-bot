@@ -9,7 +9,7 @@ import sys
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from app.core.models.base import Base
-from app.core.models import business, customer, therapist, treatment, appointment, google_token
+from app.core.models import business, customer, therapist, treatment, appointment, google_token, user
 from app.config import settings
 
 # this is the Alembic Config object, which provides

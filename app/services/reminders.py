@@ -11,19 +11,17 @@ from datetime import datetime, timedelta
 
 from sqlalchemy import select, update
 
-from app.config import settings
 from app.core.db import async_session
 from app.core.models.appointment import Appointment
+from app.core.models.business import Business
 from app.core.models.customer import Customer
 from app.core.models.therapist import Therapist
 from app.core.models.treatment import Treatment
+from app.core.tenancy import acting_for
 from app.core.timeutils import now as clinic_now, to_clinic_tz
 from app.services.whatsapp import send_message
 
 logger = logging.getLogger(__name__)
-
-
-BUSINESS_ID = settings.BUSINESS_ID
 
 # lead:   how far ahead of the appointment this reminder is meant to land.
 # window: how far back from that point a reminder still counts as due, so a
@@ -75,11 +73,12 @@ def reminder_text(kind: str, language: str, treatment: str, therapist: str, time
 
 async def send_due_reminders(now: datetime = None) -> dict:
     """
-    Send every reminder that is currently due.
+    Send every reminder that is currently due, for every active clinic.
 
     Returns counts per kind. Safe to call as often as you like: a reminder is
     claimed in the database before it is sent, so overlapping runs cannot
-    message the same customer twice.
+    message the same customer twice. Each one goes out from its own clinic's
+    WhatsApp number.
     """
     now = now or clinic_now()
     sent = {kind: 0 for kind in REMINDER_KINDS}
@@ -91,8 +90,11 @@ async def send_due_reminders(now: datetime = None) -> dict:
             flag = spec["flag"]
 
             result = await session.execute(
-                select(Appointment).where(
-                    Appointment.business_id == BUSINESS_ID,
+                select(Appointment)
+                .join(Business, Business.id == Appointment.business_id)
+                .where(
+                    # A clinic switched off sends nothing.
+                    Business.is_active.is_(True),
                     Appointment.status == "confirmed",
                     getattr(Appointment, flag).is_(False),
                     Appointment.start_time >= earliest,
@@ -105,7 +107,9 @@ async def send_due_reminders(now: datetime = None) -> dict:
                 if not await claim(session, appointment.id, flag):
                     continue  # another run got there first
 
-                if await deliver(session, appointment, kind):
+                with acting_for(appointment.business_id):
+                    delivered = await deliver(session, appointment, kind)
+                if delivered:
                     sent[kind] += 1
                 else:
                     failed += 1

@@ -1,19 +1,19 @@
 import logging
+import uuid
 from datetime import datetime, date, time, timedelta
 from sqlalchemy import select
-from app.config import settings
 from app.core.db import async_session
+from app.core.tenancy import current_business_id
 from app.core import audit
 from app.core.timeutils import now as clinic_now, to_clinic_tz
 from app.core.models.business import Business
 from app.core.models.therapist import Therapist
 from app.core.models.treatment import Treatment
 from app.core.models.appointment import Appointment
+from app.services import staffing
 
 logger = logging.getLogger(__name__)
 
-
-BUSINESS_ID = settings.BUSINESS_ID
 
 SLOT_STEP_MINUTES = 30
 
@@ -22,7 +22,7 @@ async def get_treatments() -> list:
     async with async_session() as session:
         result = await session.execute(
             select(Treatment).where(
-                Treatment.business_id == BUSINESS_ID,
+                Treatment.business_id == current_business_id(),
                 Treatment.is_active == True
             )
         )
@@ -39,22 +39,36 @@ async def get_treatments() -> list:
         ]
 
 async def get_therapists() -> list:
-    """Get all active therapists"""
+    """
+    All active therapists. "treatments" holds the names of the active
+    treatments each one does, or None when they do all of them.
+    """
     async with async_session() as session:
         result = await session.execute(
             select(Therapist).where(
-                Therapist.business_id == BUSINESS_ID,
+                Therapist.business_id == current_business_id(),
                 Therapist.is_active == True
             )
         )
         therapists = result.scalars().all()
+        ticked = await staffing.ticked_treatments(session, [t.id for t in therapists])
+        names = {}
+        if ticked:
+            names = dict((await session.execute(
+                select(Treatment.id, Treatment.name).where(
+                    Treatment.business_id == current_business_id(),
+                    Treatment.is_active == True,
+                )
+            )).all())
         return [
             {
                 "id": str(t.id),
                 "name": t.name,
                 "working_days": t.working_days,
                 "working_hours_start": t.working_hours_start,
-                "working_hours_end": t.working_hours_end
+                "working_hours_end": t.working_hours_end,
+                "treatments": (sorted(names[i] for i in ticked[t.id] if i in names)
+                               if t.id in ticked else None),
             }
             for t in therapists
         ]
@@ -73,6 +87,18 @@ def parse_hhmm(value: str) -> time | None:
     if not (0 <= hour <= 23 and 0 <= minute <= 59):
         return None
     return time(hour=hour, minute=minute)
+
+
+def works_then(therapist, start: datetime, end: datetime) -> bool:
+    """Whether the therapist works on that day, for the whole of start to end."""
+    start, end = to_clinic_tz(start), to_clinic_tz(end)
+    if not therapist.working_days or start.strftime("%A") not in therapist.working_days:
+        return False
+    opens = parse_hhmm(therapist.working_hours_start)
+    closes = parse_hhmm(therapist.working_hours_end)
+    if opens is None or closes is None or end.date() != start.date():
+        return False
+    return opens <= start.time() and end.time() <= closes
 
 
 def compute_available_slots(
@@ -144,36 +170,46 @@ def compute_available_slots(
     return available_slots
 
 
-async def get_available_slots(treatment_id: str, target_date: date) -> list:
-    """Get available time slots for a treatment on a specific date"""
+async def get_available_slots(treatment_id: str, target_date: date,
+                              exclude_appointment_id=None) -> list:
+    """
+    Get available time slots for a treatment on a specific date.
+
+    `exclude_appointment_id` leaves one booking out of the conflict check, so
+    rescheduling an appointment can offer times that overlap where it is now.
+    """
     async with async_session() as session:
         treatment = await session.get(Treatment, treatment_id)
-        if not treatment:
+        if not treatment or str(treatment.business_id) != current_business_id():
             return []
 
         result = await session.execute(
             select(Therapist).where(
-                Therapist.business_id == BUSINESS_ID,
+                Therapist.business_id == current_business_id(),
                 Therapist.is_active == True
             )
         )
         therapists = result.scalars().all()
+        # Only those who do this treatment are offered for it.
+        able = await staffing.who_does(session, therapists, treatment.id)
 
-        start_of_day = datetime.combine(target_date, datetime.min.time())
-        end_of_day = datetime.combine(target_date, datetime.max.time())
+        # The clinic's day, not UTC's: naive bounds against a timezone-aware
+        # column are read as UTC, which shifts the day by the clinic's offset.
+        start_of_day = to_clinic_tz(datetime.combine(target_date, time.min))
+        end_of_day = to_clinic_tz(datetime.combine(target_date, time.max))
 
-        result = await session.execute(
-            select(Appointment).where(
-                Appointment.business_id == BUSINESS_ID,
-                Appointment.start_time >= start_of_day,
-                Appointment.start_time <= end_of_day,
-                Appointment.status == "confirmed"
-            )
+        query = select(Appointment).where(
+            Appointment.business_id == current_business_id(),
+            Appointment.start_time >= start_of_day,
+            Appointment.start_time <= end_of_day,
+            Appointment.status == "confirmed"
         )
-        existing_appointments = result.scalars().all()
+        if exclude_appointment_id is not None:
+            query = query.where(Appointment.id != exclude_appointment_id)
+        existing_appointments = (await session.execute(query)).scalars().all()
 
         slots = compute_available_slots(
-            therapists=therapists,
+            therapists=able,
             appointments=existing_appointments,
             target_date=target_date,
             duration_minutes=treatment.duration_minutes,
@@ -187,12 +223,34 @@ async def get_available_slots(treatment_id: str, target_date: date) -> list:
             "duration_minutes": treatment.duration_minutes,
         }, outputs={
             "active_therapists": len(therapists),
+            "doing_this_treatment": len(able),
             "existing_appointments": len(existing_appointments),
             "slots_found": len(slots),
             "therapists_offering": sorted({s["therapist_name"] for s in slots}),
         })
 
         return slots
+
+
+async def get_business_summary() -> str:
+    """
+    Which clinic the bot is answering for: its name, address, phone and hours.
+
+    One server answers for many clinics, so the bot has to be told whose
+    receptionist it is, or a customer asking where to come gets nothing.
+    """
+    async with async_session() as session:
+        business = await session.get(Business, uuid.UUID(current_business_id()))
+    if not business:
+        return ""
+    lines = [f"Name: {business.name}"]
+    if business.address:
+        lines.append(f"Address: {business.address}")
+    if business.phone:
+        lines.append(f"Phone: {business.phone}")
+    if business.working_hours_start and business.working_hours_end:
+        lines.append(f"Opening hours: {business.working_hours_start}-{business.working_hours_end}")
+    return "\n".join(lines)
 
 
 async def get_treatments_summary() -> str:
@@ -222,7 +280,9 @@ async def get_therapists_summary() -> str:
     lines = []
     for t in therapists:
         days_he = ", ".join(day_names_he.get(d.strip(), d) for d in t["working_days"].split(","))
-        lines.append(f"- {t['name']}: {t['working_hours_start']}-{t['working_hours_end']}, ימים: {days_he}")
+        does = "כל הטיפולים" if t["treatments"] is None else (", ".join(t["treatments"]) or "אף טיפול כרגע")
+        lines.append(f"- {t['name']}: {t['working_hours_start']}-{t['working_hours_end']}, "
+                     f"ימים: {days_he}, טיפולים: {does}")
 
     return "\n".join(lines)
 

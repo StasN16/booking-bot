@@ -5,6 +5,7 @@ from app.core.enums import ConversationState
 from app.services.ai_engine import process_message
 from app.services.whatsapp import send_message
 from app.services.availability import (
+    get_business_summary,
     get_treatments_summary,
     get_therapists_summary,
     get_available_slots,
@@ -20,6 +21,7 @@ from app.services.booking import (
 from app.services.date_parser import parse_date
 from app.services import session_store
 from app.core import audit
+from app.core.tenancy import current_business_id
 
 logger = logging.getLogger(__name__)
 
@@ -39,6 +41,7 @@ MESSAGES = {
         "rescheduled": "העברתי את התור ל{date} בשעה {time}",
         "cancelled": "ביטלתי את התור ל{treatment} ב{date} בשעה {time}",
         "slot_taken": "השעה הזאת כבר נתפסה. רוצה לבחור שעה אחרת",
+        "therapist_cannot_do": "מי שביקשת לא עושה את הטיפול הזה. רוצה לבחור מישהו אחר מהרשימה",
         "no_appointment": "לא מצאתי לך תור קרוב",
         "bad_datetime": "לא הצלחתי להבין את התאריך או השעה. אפשר שוב",
         "in_the_past": "הזמן הזה כבר עבר. אפשר לבחור מועד אחר",
@@ -57,6 +60,7 @@ MESSAGES = {
         "rescheduled": "Moved your appointment to {date} at {time}",
         "cancelled": "Cancelled your {treatment} on {date} at {time}",
         "slot_taken": "That time just got taken. Want to pick another one",
+        "therapist_cannot_do": "The person you asked for doesn't do that treatment. Want to pick someone else from the list",
         "no_appointment": "I couldn't find an upcoming appointment for you",
         "bad_datetime": "I couldn't make out the date or time. Mind saying it again",
         "in_the_past": "That time has already passed. Pick another one",
@@ -75,6 +79,7 @@ MESSAGES = {
         "rescheduled": "Перенесла вашу запись на {date} в {time}",
         "cancelled": "Отменила вашу запись на {treatment} {date} в {time}",
         "slot_taken": "Это время уже заняли. Хотите выбрать другое",
+        "therapist_cannot_do": "Этот специалист не делает эту процедуру. Хотите выбрать другого из списка",
         "no_appointment": "Я не нашла у вас ближайшей записи",
         "bad_datetime": "Не разобрала дату или время. Повторите, пожалуйста",
         "in_the_past": "Это время уже прошло. Выберите другое",
@@ -110,6 +115,7 @@ async def handle_message(from_number: str, message_text: str):
     """Main function that handles incoming WhatsApp messages"""
     language = DEFAULT_LANGUAGE
     with audit.trace("handle_message",
+                     clinic=current_business_id(),
                      phone=audit.mask_phone(from_number),
                      message_length=len(message_text or "")) as turn:
       try:
@@ -133,9 +139,11 @@ async def handle_message(from_number: str, message_text: str):
 
         # Load real clinic data from database
         with audit.step("clinic.load") as s_clinic:
+            business_data = await get_business_summary()
             clinic_data = await get_treatments_summary()
             therapist_data = await get_therapists_summary()
             s_clinic.outputs = {
+                "clinic_found": bool(business_data),
                 "treatments_chars": len(clinic_data),
                 "therapists_chars": len(therapist_data),
                 "treatments_empty": "אין טיפולים" in clinic_data,
@@ -149,6 +157,7 @@ async def handle_message(from_number: str, message_text: str):
             clinic_data=clinic_data,
             therapist_data=therapist_data,
             booking_context=booking_context,
+            business_data=business_data,
         )
 
         reply = ai_response.get("response", "")
@@ -301,8 +310,8 @@ async def handle_message(from_number: str, message_text: str):
 def booking_failure(language: str, result: dict, retry_state: str):
     """Turn a booking service error code into a reply and the state to fall back to."""
     error = result.get("error", "")
-    if error == "slot_taken":
-        return t(language, "slot_taken"), retry_state
+    if error in ("slot_taken", "therapist_cannot_do"):
+        return t(language, error), retry_state
     if error == "no_appointment":
         return t(language, "no_appointment"), ConversationState.IDLE
     if error in ("bad_datetime", "in_the_past"):

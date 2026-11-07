@@ -2,20 +2,19 @@ import logging
 import uuid
 from datetime import datetime, timedelta
 from sqlalchemy import select
-from app.config import settings
 from app.core.db import async_session
+from app.core.tenancy import current_business_id
 from app.core import audit
 from app.core.models.customer import Customer
 from app.core.models.appointment import Appointment
 from app.core.models.treatment import Treatment
 from app.core.models.therapist import Therapist
 from app.core.timeutils import now as clinic_now, to_clinic_tz
+from app.services import staffing
+from app.services.availability import works_then
 from app.services.date_parser import parse_date, parse_time
 
 logger = logging.getLogger(__name__)
-
-
-BUSINESS_ID = settings.BUSINESS_ID
 
 
 def pick_best_match(candidates: list, query: str):
@@ -69,6 +68,27 @@ def build_start_time(appointment_date: str, appointment_time: str) -> datetime |
     return to_clinic_tz(naive)
 
 
+async def _busy_therapists(session, start_time, end_time) -> set:
+    """The therapists of this clinic with a confirmed appointment overlapping the time."""
+    result = await session.execute(select(Appointment.therapist_id).where(
+        Appointment.business_id == current_business_id(),
+        Appointment.status == "confirmed",
+        Appointment.start_time < end_time,
+        Appointment.end_time > start_time,
+    ))
+    return set(result.scalars())
+
+
+def choose_therapist(able: list, busy: set, start_time, end_time):
+    """
+    With nobody asked for: someone who does the treatment and is free,
+    preferring who works at that time over who does not.
+    """
+    free = [t for t in able if t.id not in busy]
+    return next((t for t in free if works_then(t, start_time, end_time)), None) \
+        or (free[0] if free else None)
+
+
 async def _find_conflict(session, therapist_id, start_time, end_time, exclude_id=None):
     """Return an overlapping confirmed appointment for this therapist, if any."""
     query = select(Appointment).where(
@@ -98,7 +118,7 @@ async def _get_customer(session, customer_phone: str):
     result = await session.execute(
         select(Customer).where(
             Customer.phone == customer_phone,
-            Customer.business_id == BUSINESS_ID
+            Customer.business_id == current_business_id()
         )
     )
     return result.scalar_one_or_none()
@@ -124,7 +144,7 @@ async def get_or_create_customer(phone: str, name: str = None) -> Customer:
         if not customer:
             customer = Customer(
                 id=uuid.uuid4(),
-                business_id=BUSINESS_ID,
+                business_id=current_business_id(),
                 phone=phone,
                 name=name,
                 conversation_state="idle"
@@ -152,7 +172,7 @@ async def create_appointment(
             if not customer:
                 customer = Customer(
                     id=uuid.uuid4(),
-                    business_id=BUSINESS_ID,
+                    business_id=current_business_id(),
                     phone=customer_phone,
                     conversation_state="idle"
                 )
@@ -161,7 +181,7 @@ async def create_appointment(
 
             result = await session.execute(
                 select(Treatment).where(
-                    Treatment.business_id == BUSINESS_ID,
+                    Treatment.business_id == current_business_id(),
                     Treatment.is_active == True
                 )
             )
@@ -169,22 +189,6 @@ async def create_appointment(
 
             if not treatment:
                 return {"success": False, "error": "treatment_not_found"}
-
-            result = await session.execute(
-                select(Therapist).where(
-                    Therapist.business_id == BUSINESS_ID,
-                    Therapist.is_active == True
-                )
-            )
-            therapists = list(result.scalars().all())
-            therapist = pick_best_match(therapists, therapist_name)
-
-            if not therapist:
-                # No specific therapist asked for - any active one will do.
-                therapist = therapists[0] if therapists else None
-
-            if not therapist:
-                return {"success": False, "error": "no_therapist_available"}
 
             start_time = build_start_time(appointment_date, appointment_time)
             if start_time is None:
@@ -198,7 +202,25 @@ async def create_appointment(
             if start_time < clinic_now():
                 return {"success": False, "error": "in_the_past"}
 
-            if await _find_conflict(session, therapist.id, start_time, end_time):
+            result = await session.execute(
+                select(Therapist).where(
+                    Therapist.business_id == current_business_id(),
+                    Therapist.is_active == True
+                )
+            )
+            therapists = list(result.scalars().all())
+            able = await staffing.who_does(session, therapists, treatment.id)
+            if not able:
+                return {"success": False, "error": "no_therapist_available"}
+            busy = await _busy_therapists(session, start_time, end_time)
+
+            therapist = pick_best_match(therapists, therapist_name)
+            if therapist is not None and therapist not in able:
+                return {"success": False, "error": "therapist_cannot_do"}
+            if therapist is None:
+                # Nobody asked for, or nobody by that name: whoever can.
+                therapist = choose_therapist(able, busy, start_time, end_time)
+            if therapist is None or therapist.id in busy:
                 return {"success": False, "error": "slot_taken"}
 
             audit.record("booking.resolved", outputs={
@@ -210,7 +232,7 @@ async def create_appointment(
 
             appointment = Appointment(
                 id=uuid.uuid4(),
-                business_id=BUSINESS_ID,
+                business_id=current_business_id(),
                 customer_id=customer.id,
                 therapist_id=therapist.id,
                 treatment_id=treatment.id,
