@@ -61,6 +61,10 @@ class Settings(BaseSettings):
     # The interactive API page at /docs. Off online, where nobody needs it.
     API_DOCS: bool = True
 
+    # For scripts/start.sh, not the server: the fixed ngrok domain. Named
+    # here because a .env line the settings do not know stops the server.
+    NGROK_DOMAIN: str = ""
+
     @field_validator("DATABASE_URL")
     @classmethod
     def asyncpg_driver(cls, value: str) -> str:

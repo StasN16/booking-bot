@@ -791,6 +791,20 @@ class TestDatabaseAddress:
         assert Settings(DATABASE_URL=pasted).DATABASE_URL == "postgresql+asyncpg://user:pw@host:5432/postgres"
 
 
+class TestEnvFile:
+    def test_every_line_of_the_example_can_be_filled_in(self, tmp_path):
+        """A .env line the settings do not know stops the server, so each one the example offers must be known."""
+        import re
+        from pathlib import Path
+        from app.config import Settings
+        example = (Path(__file__).resolve().parent.parent / ".env.example").read_text()
+        keys = re.findall(r"^([A-Z_]+)=", example, flags=re.M)
+        assert "NGROK_DOMAIN" in keys
+        filled = tmp_path / ".env"
+        filled.write_text("".join(f"{key}=1\n" for key in keys))
+        Settings(_env_file=filled)  # raises for a key it does not know
+
+
 class TestApiDocsSwitch:
     def test_online_the_api_page_can_be_switched_off(self, monkeypatch):
         import importlib
