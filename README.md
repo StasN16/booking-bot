@@ -158,22 +158,23 @@ the file.
 
 ### With the helper (one command on the Mac)
 
-1. Sign in at render.com with GitHub, and add a payment card (Billing).
-2. Open your Supabase project. If it says *Paused*, press **Restore**.
-3. In Terminal:
+In Terminal:
 
-   ```bash
-   cd ~/booking-bot
-   git pull
-   ./scripts/go_online.sh
-   ```
+```bash
+cd ~/booking-bot
+git pull
+./scripts/go_online.sh
+```
 
 It checks every value before it goes in: the database answers, Meta
 recognizes the token and the App secret, and the token does not expire. It
-asks for a new owner password and puts each value on the clipboard to paste
-into Render's Blueprint page. Then it waits for the server to start, checks
-it holds the same settings, points WhatsApp's webhook at it, and makes sure
-a clinic answers the WhatsApp number. Typing is hidden and nothing typed is
+asks for a new owner password, and opens each page that has something to
+copy: Meta's App secret, and Supabase only when needed. Then it opens
+Render's setup page for this repository (the first time, Render asks you to
+sign in with GitHub and for a payment card) and puts each value on the
+clipboard to paste there. Last, it waits for the server to start, checks it
+holds the same settings, points WhatsApp's webhook at it, and makes sure a
+clinic answers the WhatsApp number. Typing is hidden and nothing typed is
 saved.
 
 Stopped before the end? Once Render shows the service **Live**:

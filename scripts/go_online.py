@@ -14,6 +14,10 @@ Start to finish, in one run:
    box. Nothing typed is saved, and the clipboard is emptied afterwards.
 3. The server, once it answers: checked for the same settings, WhatsApp's
    webhook pointed at it, and a clinic made to answer the WhatsApp number.
+
+Whenever something has to be copied from a website, that page is opened
+in the browser: Supabase's project, Meta's app settings, Render's setup
+page for this repository.
 """
 import argparse
 import asyncio
@@ -22,6 +26,7 @@ import hashlib
 import hmac
 import json
 import pathlib
+import re
 import secrets
 import shutil
 import subprocess
@@ -135,6 +140,44 @@ def server_address(address: str, allow_http: bool = False) -> str | None:
     if "." not in parts.hostname and parts.hostname != "localhost":
         return None  # a stray word, not an address
     return f"{parts.scheme}://{parts.netloc}"
+
+
+def supabase_page(url: str) -> str:
+    """The Supabase project's page, from its database address; else the list of projects."""
+    try:
+        parts = urlsplit(url.strip())
+        user, host = parts.username or "", parts.hostname or ""
+    except ValueError:
+        user = host = ""
+    ref = ""
+    if user.startswith("postgres.") and host.endswith(".supabase.com"):
+        ref = user.removeprefix("postgres.")
+    elif host.startswith("db.") and host.endswith(".supabase.co"):
+        ref = host.removeprefix("db.").removesuffix(".supabase.co")
+    if re.fullmatch(r"[a-z0-9]+", ref):
+        return f"https://supabase.com/dashboard/project/{ref}"
+    return "https://supabase.com/dashboard/projects"
+
+
+def meta_page(app_id: str | None) -> str:
+    """Where Meta shows the app's ID and secret; else the list of apps."""
+    if app_id and app_id.isdigit():
+        return f"https://developers.facebook.com/apps/{app_id}/settings/basic/"
+    return "https://developers.facebook.com/apps/"
+
+
+def repo_address(remote: str) -> str | None:
+    """A GitHub remote, https or ssh, as the repository's https address."""
+    match = re.fullmatch(r"(?:https://github\.com/|git@github\.com:|ssh://git@github\.com/)"
+                         r"([\w.-]+/[\w.-]+?)(?:\.git)?/?", remote.strip())
+    return f"https://github.com/{match.group(1)}" if match else None
+
+
+def render_page(repo: str | None) -> str:
+    """Render's page that sets up this repository from its render.yaml."""
+    if repo:
+        return f"https://render.com/deploy?repo={repo}"
+    return "https://dashboard.render.com/select-repo?type=blueprint"
 
 
 def who_answers(clinics: list[dict], phone_id: str) -> dict | None:
@@ -321,17 +364,46 @@ def say(ok: bool | None, text: str) -> None:
     print(f"    {MARK[ok]} {text}")
 
 
+def open_page(url: str) -> None:
+    """Open a page in the Mac's browser. The address is shown too, in case it does not open."""
+    print(f"    Opening {url}")
+    try:
+        subprocess.run(["open", url], capture_output=True, timeout=10)
+    except Exception:
+        pass
+
+
+def github_repo() -> str | None:
+    """This copy's repository on GitHub."""
+    try:
+        remote = subprocess.run(["git", "remote", "get-url", "origin"], cwd=SCRIPTS.parent,
+                                capture_output=True, text=True, timeout=10).stdout
+    except Exception:
+        return None
+    return repo_address(remote)
+
+
 # --- 1. the values ------------------------------------------------------------------
 
 def choose_database() -> str:
-    url = migrate_supabase.find_supabase_url() or ""
-    if url:
-        print(f"    Found in .env: {migrate_supabase.mask(url)}")
+    kept = migrate_supabase.find_supabase_url() or ""
+    if kept:
+        print(f"    Found in .env: {migrate_supabase.mask(kept)}")
+    url, retry, opened = kept, kept, False
     while True:
         if not url:
-            print("    In Supabase: your project → Connect → Session pooler → copy the address.")
-            print("    Put your database password where it says [YOUR-PASSWORD].")
-            url = hidden("Paste the address")
+            if not opened:
+                open_page(supabase_page(kept))
+                opened = True
+            if retry:
+                print("    If the project shows Paused, press Restore, wait a minute, then press Enter")
+                print("    to try again. Otherwise: Connect → Session pooler → copy the address,")
+                print("    with your database password where it says [YOUR-PASSWORD].")
+                url = hidden("Paste another address, or press Enter to try again") or retry
+            else:
+                print("    Connect → Session pooler → copy the address, with your database")
+                print("    password where it says [YOUR-PASSWORD].")
+                url = hidden("Paste the address")
         fixed = session_pooler(url)
         if fixed != url.strip():
             say(None, "That is the Transaction pooler. Using the Session pooler: the same address, port 5432.")
@@ -339,13 +411,13 @@ def choose_database() -> str:
         problem = database_url_problem(url)
         if problem:
             say(False, problem)
-            url = ""
+            url = retry = ""  # not worth trying again as it is
             continue
         ok, summary = asyncio.run(database_summary(url))
         say(ok, summary)
         if ok or (ok is None and ask("Render may reach it all the same. Use it anyway? [y/N]").lower() == "y"):
             return url
-        url = ""
+        url, retry = "", url
 
 
 def choose_owner_password(current: str) -> str:
@@ -377,31 +449,29 @@ def working(value: str, check, prompt: str) -> str:
 def choose_app_secret(token: str, known: str) -> tuple[str | None, str]:
     """Meta's app id and App secret, the secret checked with Meta."""
     app_id = meta_app_id(token)
-    typed_id = False
-    secret = known
-    if not secret:
-        print("    Meta for Developers → My Apps → your app → App settings → Basic →")
-        print("    App secret → Show → copy.")
-    if not app_id:
-        app_id = ask("The App ID (the number at the top of that page)") or None
-        typed_id = True
+    secret, typed_id, opened = known, False, False
     while True:
-        if not secret:
-            secret = hidden("Paste the App secret")
+        if not app_id or not secret:
+            if not opened:
+                open_page(meta_page(app_id))
+                if not app_id:
+                    print("    Click your app, then App settings → Basic.")
+                opened = True
+            if not app_id:
+                app_id = ask("The App ID (the number at the top of that page)") or None
+                typed_id = True
             if not secret:
-                say(False, "Nothing was pasted.")
-                continue
+                secret = hidden("App secret → Show → copy, and paste it here")
+                if not secret:
+                    say(False, "Nothing was pasted.")
+                    continue
         verdict = secret_is_the_apps(app_id, secret) if app_id else None
         if verdict is not False:
             say(verdict, "Meta confirms it is the app's secret." if verdict
                 else "Could not ask Meta about it; using it as it is.")
             return app_id, secret
-        if known and secret == known:
-            say(False, "The App secret in .env is not this app's.")
-            print("    Meta for Developers → My Apps → your app → App settings → Basic →")
-            print("    App secret → Show → copy.")
-        else:
-            say(False, "Meta says that is not this app's secret. Click Show, copy it again.")
+        say(False, "The App secret in .env is not this app's." if known and secret == known
+            else "Meta says that is not this app's secret. Click Show, copy it again.")
         if typed_id:
             app_id = ask("The App ID again (top of the page)") or app_id
         secret = ""
@@ -466,9 +536,12 @@ def gather(lines: list[str]) -> tuple[dict[str, str], str | None]:
 # --- 2. Render ------------------------------------------------------------------------
 
 def paste_into_render(values: dict[str, str]) -> None:
-    print("\nAll checked. Now Render: render.com → New → Blueprint → booking-bot → Connect.")
-    print("Blueprint Name: booking-bot. Below it are boxes for the values. Each value here")
-    print("is copied for you: click its box, press Cmd+V, come back here and press Enter.\n")
+    print("\nAll checked. Now Render, which opens in your browser. Sign in with GitHub if it")
+    print("asks, and add a payment card if it asks (about $7 a month). Blueprint Name:")
+    print("booking-bot. Below it are boxes for the values. Each value here is copied for")
+    print("you: click its box, press Cmd+V, come back here and press Enter.")
+    open_page(render_page(github_repo()))
+    print()
     try:
         for n, key in enumerate(ASKED, 1):
             if values[key]:

@@ -140,6 +140,49 @@ class TestServerAddress:
         assert go_online.server_address("http://127.0.0.1:8000", allow_http=True) == "http://127.0.0.1:8000"
 
 
+class TestPages:
+    """The pages opened for the person, so nothing has to be found in a menu."""
+
+    @pytest.mark.parametrize("url", [
+        SESSION_POOLER,
+        "postgresql://postgres:Secret123@db.abcdef.supabase.co:5432/postgres",
+    ])
+    def test_the_supabase_project_from_its_address(self, url):
+        assert go_online.supabase_page(url) == "https://supabase.com/dashboard/project/abcdef"
+
+    @pytest.mark.parametrize("url", [
+        "", "not an address",
+        "postgresql+asyncpg://postgres.PROJECT_REF:PASSWORD@aws-1-eu-central-1.pooler.supabase.com:5432/postgres",
+        "postgresql+asyncpg://stas@localhost:5432/bookingbot",
+    ])
+    def test_otherwise_the_list_of_projects(self, url):
+        assert go_online.supabase_page(url) == "https://supabase.com/dashboard/projects"
+
+    def test_meta_where_the_app_secret_is(self):
+        assert go_online.meta_page("4242") == "https://developers.facebook.com/apps/4242/settings/basic/"
+        assert go_online.meta_page(None) == "https://developers.facebook.com/apps/"
+
+    @pytest.mark.parametrize("remote", [
+        "https://github.com/StasN16/booking-bot",
+        "https://github.com/StasN16/booking-bot.git\n",
+        "https://github.com/StasN16/booking-bot/",
+        "git@github.com:StasN16/booking-bot.git",
+        "ssh://git@github.com/StasN16/booking-bot.git",
+    ])
+    def test_the_repository_however_git_names_it(self, remote):
+        assert go_online.repo_address(remote) == "https://github.com/StasN16/booking-bot"
+
+    @pytest.mark.parametrize("remote", ["", "http://proxy@127.0.0.1:1234/git/StasN16/booking-bot",
+                                        "https://gitlab.com/StasN16/booking-bot"])
+    def test_not_a_github_repository(self, remote):
+        assert go_online.repo_address(remote) is None
+
+    def test_render_sets_up_this_repository(self):
+        assert go_online.render_page("https://github.com/StasN16/booking-bot") == \
+            "https://render.com/deploy?repo=https://github.com/StasN16/booking-bot"
+        assert go_online.render_page(None) == "https://dashboard.render.com/select-repo?type=blueprint"
+
+
 class TestWhoAnswers:
     """The same choice the server makes in app/core/tenancy.py."""
 
@@ -350,7 +393,7 @@ def mac(tmp_path, monkeypatch):
     monkeypatch.setattr(go_online.migrate_supabase, "ENV", env)
 
     state = SimpleNamespace(
-        env=env, clipboard=[], prompts=[], answers={},
+        env=env, clipboard=[], prompts=[], answers={}, opened=[],
         database=(True, "Connected. Its clinics: Clinic."),
         openai_keys={"sk-test", "sk-new"}, whatsapp_tokens={"EAAG-token", "EAAG-permanent"},
         app_id="4242", expires=0,
@@ -365,6 +408,8 @@ def mac(tmp_path, monkeypatch):
     monkeypatch.setattr(go_online, "hidden", keyboard)
     monkeypatch.setattr("builtins.input", keyboard)
     monkeypatch.setattr(go_online, "copy", state.clipboard.append)
+    monkeypatch.setattr(go_online, "open_page", state.opened.append)
+    monkeypatch.setattr(go_online, "github_repo", lambda: "https://github.com/StasN16/booking-bot")
 
     async def database_summary(url):
         state.summarized = url
@@ -399,6 +444,11 @@ class TestGathering:
         assert values == GATHERED and app_id == "4242"
         assert len(mac.prompts) == 3
 
+    def test_the_page_with_the_app_secret_is_opened_for_it(self, mac):
+        self.typical(mac)
+        self.gather()
+        assert mac.opened == ["https://developers.facebook.com/apps/4242/settings/basic/"]
+
     def test_nothing_typed_is_saved(self, mac):
         self.typical(mac)
         self.gather()
@@ -415,6 +465,7 @@ class TestGathering:
         self.answer(mac, **{"Paste the address": [SESSION_POOLER.replace(":5432/", ":6543/")]})
         values, _ = self.gather()
         assert values["DATABASE_URL"] == SESSION_POOLER  # moved to the Session pooler
+        assert mac.opened[0] == "https://supabase.com/dashboard/projects"
 
     def test_an_address_supabase_refuses_is_asked_for_again(self, mac, monkeypatch):
         good = SESSION_POOLER.replace("Secret123", "NewSecret456")
@@ -423,9 +474,25 @@ class TestGathering:
             return (True, "Connected.") if url == good else (False, "Supabase refused the password.")
         monkeypatch.setattr(go_online, "database_summary", database_summary)
         self.typical(mac)
-        self.answer(mac, **{"Paste the address": [good]})
+        self.answer(mac, **{"another address": [good]})
         values, _ = self.gather()
         assert values["DATABASE_URL"] == good
+        assert mac.opened[0] == "https://supabase.com/dashboard/project/abcdef"
+
+    def test_a_paused_project_is_tried_again_after_restoring(self, mac, monkeypatch):
+        tries = []
+
+        async def database_summary(url):
+            tries.append(url)
+            if len(tries) == 1:
+                return False, "Supabase refused it (Tenant or user not found). Is the project paused?"
+            return True, "Connected."
+        monkeypatch.setattr(go_online, "database_summary", database_summary)
+        self.typical(mac)  # Enter at "try again": nothing typed
+        values, _ = self.gather()
+        assert tries == [SESSION_POOLER, SESSION_POOLER]
+        assert values["DATABASE_URL"] == SESSION_POOLER
+        assert mac.opened.count("https://supabase.com/dashboard/project/abcdef") == 1
 
     def test_an_address_out_of_reach_from_here_can_still_be_used(self, mac):
         mac.database = (None, "Could not reach it from this network (TimeoutError).")
@@ -460,6 +527,7 @@ class TestGathering:
         values, _ = self.gather()
         assert values["WHATSAPP_APP_SECRET"] == APP_SECRET
         assert not any("App secret" in prompt for prompt in mac.prompts)
+        assert mac.opened == []
 
     def test_the_app_id_is_asked_for_when_the_token_does_not_say(self, mac):
         mac.app_id = None
@@ -467,6 +535,7 @@ class TestGathering:
         self.answer(mac, **{"App ID": ["4242"]})
         _, app_id = self.gather()
         assert app_id == "4242"
+        assert mac.opened == ["https://developers.facebook.com/apps/"]
 
     def test_a_token_that_expires_can_be_swapped_for_a_permanent_one(self, mac):
         mac.expires = 1767225600
@@ -502,6 +571,10 @@ class TestPastingIntoRender:
     def test_each_value_is_copied_in_the_order_render_lists_them(self, mac):
         go_online.paste_into_render(GATHERED)
         assert mac.clipboard == [GATHERED[key] for key in go_online.ASKED] + [""]
+
+    def test_render_opens_on_this_repository(self, mac):
+        go_online.paste_into_render(GATHERED)
+        assert mac.opened == ["https://render.com/deploy?repo=https://github.com/StasN16/booking-bot"]
 
     def test_an_empty_one_is_left_empty(self, mac):
         go_online.paste_into_render({**GATHERED, "CLINIC_START_PASSWORD": ""})
